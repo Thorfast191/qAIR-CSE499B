@@ -1,0 +1,15 @@
+transformers
+accelerate
+bitsandbytes
+sentence-transformers
+pennylane
+pennylane-lightning-gpu
+cuquantum-cu12
+custatevec-cu12
+scikit-learn
+matplotlib
+seaborn
+umap-learn
+plotly
+networkx
+datasets
