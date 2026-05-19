@@ -19,7 +19,7 @@ from models.full_model import QAIRvNext
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ============================================================
-# TRAINING PIPELINE
+# TRAINING
 # ============================================================
 
 def run_training(
@@ -61,7 +61,7 @@ def run_training(
     )
 
     # ========================================================
-    # DATALOADERS
+    # LOADERS
     # ========================================================
 
     train_loader = DataLoader(
@@ -125,7 +125,7 @@ def run_training(
 
         meta_dir="./meta",
 
-        name=f\"qair_{benchmark}\"
+        name=f"qair_{benchmark}"
 
     )
 

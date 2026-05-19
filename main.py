@@ -2,7 +2,6 @@ import argparse
 
 from training.ablations import run_ablation_suite
 from training.runner import run_training
-from training.evaluate import run_evaluation
 
 # ============================================================
 # ARGUMENTS
@@ -22,8 +21,7 @@ def parse_args():
 
         choices=[
             "train",
-            "ablation",
-            "eval"
+            "ablation"
         ]
     )
 
@@ -77,7 +75,7 @@ if __name__ == "__main__":
     print(f"Samples    : {args.samples}")
 
     # ========================================================
-    # MODES
+    # RUN
     # ========================================================
 
     if args.mode == "ablation":
@@ -95,7 +93,3 @@ if __name__ == "__main__":
             max_samples=args.samples
 
         )
-
-    elif args.mode == "eval":
-
-        run_evaluation()
