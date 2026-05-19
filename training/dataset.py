@@ -430,20 +430,91 @@ class QAIRDataset(Dataset):
 
 def collate_fn(batch):
 
-    H = torch.stack([x["H"] for x in batch])
+    # ========================================================
+    # FIND MAX OPTIONS
+    # ========================================================
 
-    O = torch.stack([x["O"] for x in batch])
+    max_h = max(x["H"].shape[0] for x in batch)
 
-    y = torch.tensor(
-        [x["y"] for x in batch],
+    max_o = max(x["O"].shape[0] for x in batch)
+
+    dim = batch[0]["H"].shape[-1]
+
+    Hs = []
+    Os = []
+
+    ys = []
+
+    # ========================================================
+    # PAD
+    # ========================================================
+
+    for x in batch:
+
+        H = x["H"]
+        O = x["O"]
+
+        # ----------------------------------------------------
+        # PAD HYPOTHESES
+        # ----------------------------------------------------
+
+        if H.shape[0] < max_h:
+
+            pad = torch.zeros(
+
+                max_h - H.shape[0],
+
+                dim
+
+            )
+
+            H = torch.cat([H, pad], dim=0)
+
+        # ----------------------------------------------------
+        # PAD OPTIONS
+        # ----------------------------------------------------
+
+        if O.shape[0] < max_o:
+
+            pad = torch.zeros(
+
+                max_o - O.shape[0],
+
+                dim
+
+            )
+
+            O = torch.cat([O, pad], dim=0)
+
+        Hs.append(H)
+
+        Os.append(O)
+
+        ys.append(x["y"])
+
+    # ========================================================
+    # STACK
+    # ========================================================
+
+    Hs = torch.stack(Hs)
+
+    Os = torch.stack(Os)
+
+    ys = torch.tensor(
+
+        ys,
+
         dtype=torch.long
+
     )
 
     return {
 
-        "H": H,
-        "O": O,
-        "y": y
+        "H": Hs,
+
+        "O": Os,
+
+        "y": ys
 
     }
 
