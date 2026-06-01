@@ -1,29 +1,44 @@
 import matplotlib.pyplot as plt
-import numpy as np
+import torch
 
 
-def plot_energy_map(energy_matrix, title="Energy Landscape"):
+def plot_energy_map(
+    energies,
+    save_path=None
+):
 
-    """
-    energy_matrix:
-        shape = (steps, hypotheses)
-    """
+    energies = torch.tensor(
+        energies
+    ).cpu().numpy()
 
-    energy_matrix = np.array(energy_matrix)
-
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(8, 4))
 
     plt.imshow(
-        energy_matrix,
-        aspect='auto',
-        interpolation='nearest'
+        energies,
+        aspect="auto"
     )
 
-    plt.colorbar(label="Energy")
+    plt.colorbar(
+        label="Energy"
+    )
 
-    plt.xlabel("Hypothesis")
-    plt.ylabel("Reasoning Step")
+    plt.xlabel(
+        "Hypothesis"
+    )
 
-    plt.title(title)
+    plt.ylabel(
+        "Reasoning Step"
+    )
+
+    plt.title(
+        "Hypothesis Energy Evolution"
+    )
+
+    if save_path:
+
+        plt.savefig(
+            save_path,
+            bbox_inches="tight"
+        )
 
     plt.show()

@@ -1,95 +1,34 @@
 import argparse
 
-from training.ablations import run_ablation_suite
 from training.runner import run_training
+from training.ablations import run_ablation_suite
 
-# ============================================================
-# ARGUMENTS
-# ============================================================
 
-def parse_args():
+def main():
 
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-
         "--mode",
-
         type=str,
-
         default="train",
-
         choices=[
             "train",
             "ablation"
         ]
     )
 
-    parser.add_argument(
+    args = parser.parse_args()
 
-        "--benchmark",
+    if args.mode == "train":
 
-        type=str,
+        run_training()
 
-        default="arc"
-
-    )
-
-    parser.add_argument(
-
-        "--epochs",
-
-        type=int,
-
-        default=5
-
-    )
-
-    parser.add_argument(
-
-        "--samples",
-
-        type=int,
-
-        default=500
-
-    )
-
-    return parser.parse_args()
-
-# ============================================================
-# MAIN
-# ============================================================
-
-if __name__ == "__main__":
-
-    args = parse_args()
-
-    print("=" * 60)
-    print("qAIR-vNext")
-    print("=" * 60)
-
-    print(f"Mode       : {args.mode}")
-    print(f"Benchmark  : {args.benchmark}")
-    print(f"Epochs     : {args.epochs}")
-    print(f"Samples    : {args.samples}")
-
-    # ========================================================
-    # RUN
-    # ========================================================
-
-    if args.mode == "ablation":
+    elif args.mode == "ablation":
 
         run_ablation_suite()
 
-    elif args.mode == "train":
 
-        run_training(
+if __name__ == "__main__":
 
-            benchmark=args.benchmark,
-
-            epochs=args.epochs,
-
-            max_samples=args.samples
-
-        )
+    main()

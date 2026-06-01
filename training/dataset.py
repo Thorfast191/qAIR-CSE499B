@@ -1,335 +1,87 @@
 import os
-import random
 import torch
-import torch.nn.functional as F
 
 from torch.utils.data import Dataset
 
-from transformers import (
-    AutoTokenizer,
-    AutoModel
-)
+from benchmarks.arc import load_arc
 
-from datasets import load_dataset
+from models.generator import HypothesisGenerator
+from models.encoder import HypothesisEncoder
 
-# ============================================================
-# DEVICE
-# ============================================================
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+DIM = 384
 
-# ============================================================
-# EMBEDDING MODEL
-# ============================================================
-
-EMB_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-
-tokenizer = AutoTokenizer.from_pretrained(EMB_MODEL)
-
-encoder = AutoModel.from_pretrained(
-    EMB_MODEL
-).to(device)
-
-encoder.eval()
-
-for p in encoder.parameters():
-    p.requires_grad = False
-
-DIM = encoder.config.hidden_size
-
-# ============================================================
-# EMBEDDING
-# ============================================================
-
-@torch.no_grad()
-def embed_texts(texts):
-
-    inp = tokenizer(
-        texts,
-        padding=True,
-        truncation=True,
-        max_length=128,
-        return_tensors="pt"
-    ).to(device)
-
-    out = encoder(**inp)
-
-    hidden = out.last_hidden_state
-
-    mask = inp["attention_mask"].unsqueeze(-1)
-
-    pooled = (hidden * mask).sum(dim=1)
-
-    counts = mask.sum(dim=1)
-
-    pooled = pooled / counts.clamp(min=1e-9)
-
-    pooled = F.normalize(pooled, dim=-1)
-
-    return pooled.cpu()
-
-# ============================================================
-# HYPOTHESIS GENERATOR
-# ============================================================
-
-def generate_hypotheses(question, options):
-
-    templates = [
-
-        "The answer '{}' is supported by the evidence in the question.",
-
-        "A contradiction would occur if '{}' were false under the described conditions.",
-
-        "The reasoning process logically favors '{}' over the alternatives.",
-
-        "Based on elimination and consistency, '{}' becomes the most plausible answer."
-
-    ]
-
-    hyps = []
-
-    for i, opt in enumerate(options):
-
-        template = templates[i % len(templates)]
-
-        hyps.append(template.format(opt))
-
-    return hyps
-
-# ============================================================
-# ARC
-# ============================================================
-
-def parse_arc(example):
-
-    q = example["question"]
-
-    if isinstance(q, dict):
-
-        stem = q["stem"]
-
-        choices = q["choices"]
-
-        options = choices["text"]
-
-        labels = choices["label"]
-
-    else:
-
-        stem = example["question"]
-
-        choices = example["choices"]
-
-        options = choices["text"]
-
-        labels = choices["label"]
-
-    answer = example["answerKey"]
-
-    if answer not in labels:
-        return None
-
-    y = labels.index(answer)
-
-    return {
-
-        "question": stem,
-        "options": options,
-        "label": y
-
-    }
-
-# ============================================================
-# COMMONSENSEQA
-# ============================================================
-
-def parse_commonsenseqa(example):
-
-    question = example["question"]
-
-    choices = example["choices"]
-
-    options = choices["text"]
-
-    labels = choices["label"]
-
-    answer = example["answerKey"]
-
-    if answer not in labels:
-        return None
-
-    y = labels.index(answer)
-
-    return {
-
-        "question": question,
-        "options": options,
-        "label": y
-
-    }
-
-# ============================================================
-# STRATEGYQA
-# ============================================================
-
-def parse_strategyqa(example):
-
-    question = example["question"]
-
-    answer = example["answer"]
-
-    options = ["No", "Yes"]
-
-    y = 1 if answer else 0
-
-    return {
-
-        "question": question,
-        "options": options,
-        "label": y
-
-    }
-
-# ============================================================
-# OPENBOOKQA
-# ============================================================
-
-def parse_openbookqa(example):
-
-    question = example["question_stem"]
-
-    choices = example["choices"]
-
-    options = choices["text"]
-
-    labels = choices["label"]
-
-    answer = example["answerKey"]
-
-    if answer not in labels:
-        return None
-
-    y = labels.index(answer)
-
-    return {
-
-        "question": question,
-        "options": options,
-        "label": y
-
-    }
-
-# ============================================================
-# DATASET REGISTRY
-# ============================================================
-
-DATASET_REGISTRY = {
-
-    "arc": {
-        "loader": lambda: load_dataset(
-            "ai2_arc",
-            "ARC-Challenge"
-        ),
-        "parser": parse_arc
-    },
-
-    "commonsenseqa": {
-        "loader": lambda: load_dataset(
-            "commonsense_qa"
-        ),
-        "parser": parse_commonsenseqa
-    },
-
-    "strategyqa": {
-        "loader": lambda: load_dataset(
-            "strategyqa"
-        ),
-        "parser": parse_strategyqa
-    },
-
-    "openbookqa": {
-        "loader": lambda: load_dataset(
-            "openbookqa",
-            "main"
-        ),
-        "parser": parse_openbookqa
-    }
-}
-
-# ============================================================
-# MAIN DATASET
-# ============================================================
 
 class QAIRDataset(Dataset):
 
     def __init__(
         self,
-        benchmark="arc",
         split="train",
         max_samples=500,
-        cache_dir="./data"
+        cache_dir="./cache"
     ):
 
         self.samples = []
 
-        self.benchmark = benchmark
-
-        os.makedirs(cache_dir, exist_ok=True)
+        os.makedirs(
+            cache_dir,
+            exist_ok=True
+        )
 
         cache_path = os.path.join(
-
             cache_dir,
-
-            f"{benchmark}_{split}_{max_samples}.pt"
-
+            f"arc_{split}.pt"
         )
 
         # ====================================================
-        # CACHE
+        # LOAD CACHE
         # ====================================================
 
         if os.path.exists(cache_path):
 
-            print(f"[Dataset] Loading cache: {cache_path}")
+            print(
+                f"[CACHE FOUND] {cache_path}"
+            )
 
-            self.samples = torch.load(cache_path)
+            self.samples = torch.load(
+                cache_path,
+                map_location="cpu"
+            )
+
+            self.samples = self.samples[
+                :max_samples
+            ]
+
+            print(
+                f"[CACHE LOADED] "
+                f"{len(self.samples)} samples"
+            )
 
             return
 
         # ====================================================
-        # LOAD DATASET
+        # BUILD CACHE
         # ====================================================
 
-        print(f"[Dataset] Loading benchmark: {benchmark}")
+        print(
+            f"[CACHE MISSING] Building {split} cache..."
+        )
 
-        registry = DATASET_REGISTRY[benchmark]
+        generator = HypothesisGenerator()
 
-        dataset = registry["loader"]()
+        encoder = HypothesisEncoder()
 
-        parser = registry["parser"]
+        ds = load_arc()
 
-        # ====================================================
-        # SPLIT FIX
-        # ====================================================
+        if split not in ds:
 
-        if split not in dataset:
-
-            if split == "validation" and "test" in dataset:
+            if (
+                split == "validation"
+                and "test" in ds
+            ):
                 split = "test"
 
-            elif split == "validation" and "validation" in dataset:
-                split = "validation"
-
-            else:
-                split = list(dataset.keys())[0]
-
-        raw = dataset[split]
-
-        print(f"[Dataset] Processing {split}...")
-
-        # ====================================================
-        # PROCESS
-        # ====================================================
+        raw = ds[split]
 
         count = 0
 
@@ -337,49 +89,69 @@ class QAIRDataset(Dataset):
 
             try:
 
-                parsed = parser(ex)
+                question = ex["question"]
 
-                if parsed is None:
+                if isinstance(question, dict):
+
+                    stem = question["stem"]
+
+                    choices = question["choices"]
+
+                    options = choices["text"]
+
+                    labels = choices["label"]
+
+                else:
+
+                    stem = ex["question"]
+
+                    choices = ex["choices"]
+
+                    options = choices["text"]
+
+                    labels = choices["label"]
+
+                answer = ex["answerKey"]
+
+                if answer not in labels:
                     continue
 
-                q = parsed["question"]
-
-                opts = parsed["options"]
-
-                y = parsed["label"]
-
-                # ============================================
-                # FILTER
-                # ============================================
-
-                if len(opts) < 2:
-                    continue
-
-                if len(q.strip()) < 10:
-                    continue
+                y = labels.index(answer)
 
                 # ============================================
                 # HYPOTHESES
                 # ============================================
 
-                hyps = generate_hypotheses(q, opts)
+                hypotheses = generator.generate(
+                    stem,
+                    options
+                )
 
                 # ============================================
                 # EMBEDDINGS
                 # ============================================
 
-                H = embed_texts(hyps)
+                H = encoder.encode(
+                    hypotheses
+                ).cpu()
 
-                O = embed_texts(opts)
+                O = encoder.encode(
+                    options
+                ).cpu()
 
                 sample = {
 
+                    "question": stem,
+
+                    "options": options,
+
+                    "hypotheses": hypotheses,
+
                     "H": H,
+
                     "O": O,
-                    "y": y,
-                    "question": q,
-                    "options": opts,
-                    "benchmark": benchmark
+
+                    "y": y
 
                 }
 
@@ -387,11 +159,11 @@ class QAIRDataset(Dataset):
 
                 count += 1
 
-                if count % 50 == 0:
+                if count % 25 == 0:
 
                     print(
-                        f"[{benchmark}] "
-                        f"Processed {count}/{max_samples}"
+                        f"[{split}] "
+                        f"{count}/{max_samples}"
                     )
 
                 if count >= max_samples:
@@ -399,21 +171,27 @@ class QAIRDataset(Dataset):
 
             except Exception as e:
 
-                print(f"[SKIP] {e}")
-
-                continue
+                print(
+                    f"[SKIP] {e}"
+                )
 
         # ====================================================
         # SAVE CACHE
         # ====================================================
 
-        torch.save(self.samples, cache_path)
-
-        print(f"[Dataset] Saved cache: {cache_path}")
+        torch.save(
+            self.samples,
+            cache_path
+        )
 
         print(
-            f"[Dataset] Final: "
-            f"{len(self.samples)} samples"
+            f"[CACHE SAVED] "
+            f"{cache_path}"
+        )
+
+        print(
+            f"[TOTAL SAMPLES] "
+            f"{len(self.samples)}"
         )
 
     def __len__(self):
@@ -424,120 +202,32 @@ class QAIRDataset(Dataset):
 
         return self.samples[idx]
 
+
 # ============================================================
 # COLLATE
 # ============================================================
 
 def collate_fn(batch):
 
-    # ========================================================
-    # FIND MAX OPTIONS
-    # ========================================================
+    H = torch.stack(
+        [x["H"] for x in batch]
+    )
 
-    max_h = max(x["H"].shape[0] for x in batch)
+    O = torch.stack(
+        [x["O"] for x in batch]
+    )
 
-    max_o = max(x["O"].shape[0] for x in batch)
-
-    dim = batch[0]["H"].shape[-1]
-
-    Hs = []
-    Os = []
-
-    ys = []
-
-    # ========================================================
-    # PAD
-    # ========================================================
-
-    for x in batch:
-
-        H = x["H"]
-        O = x["O"]
-
-        # ----------------------------------------------------
-        # PAD HYPOTHESES
-        # ----------------------------------------------------
-
-        if H.shape[0] < max_h:
-
-            pad = torch.zeros(
-
-                max_h - H.shape[0],
-
-                dim
-
-            )
-
-            H = torch.cat([H, pad], dim=0)
-
-        # ----------------------------------------------------
-        # PAD OPTIONS
-        # ----------------------------------------------------
-
-        if O.shape[0] < max_o:
-
-            pad = torch.zeros(
-
-                max_o - O.shape[0],
-
-                dim
-
-            )
-
-            O = torch.cat([O, pad], dim=0)
-
-        Hs.append(H)
-
-        Os.append(O)
-
-        ys.append(x["y"])
-
-    # ========================================================
-    # STACK
-    # ========================================================
-
-    Hs = torch.stack(Hs)
-
-    Os = torch.stack(Os)
-
-    ys = torch.tensor(
-
-        ys,
-
+    y = torch.tensor(
+        [x["y"] for x in batch],
         dtype=torch.long
-
     )
 
     return {
 
-        "H": Hs,
+        "H": H,
 
-        "O": Os,
+        "O": O,
 
-        "y": ys
+        "y": y
 
     }
-
-# ============================================================
-# QUICK TEST
-# ============================================================
-
-if __name__ == "__main__":
-
-    ds = QAIRDataset(
-
-        benchmark="arc",
-
-        split="train",
-
-        max_samples=10
-
-    )
-
-    print(ds[0]["question"])
-
-    print(ds[0]["options"])
-
-    print(ds[0]["H"].shape)
-
-    print(ds[0]["O"].shape)

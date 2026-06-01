@@ -1,15 +1,29 @@
-import torch
 import torch.nn.functional as F
 
 
-def compute_loss(outputs, labels):
+def compute_loss(
+    outputs,
+    labels
+):
 
-    scores = outputs["scores"]
+    ce = F.cross_entropy(
 
-    ce = F.cross_entropy(scores, labels)
+        outputs["scores"],
 
-    collapse = outputs["collapse_loss"]
+        labels
 
-    loss = ce + 0.01 * collapse
+    )
+
+    collapse = outputs[
+        "collapse_loss"
+    ]
+
+    loss = (
+
+        ce
+
+        + 0.01 * collapse
+
+    )
 
     return loss

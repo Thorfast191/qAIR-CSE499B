@@ -1,25 +1,70 @@
+import torch
 import matplotlib.pyplot as plt
+
 from sklearn.decomposition import PCA
-import numpy as np
 
 
-def plot_trajectory(traj):
+def plot_trajectory(
+    trajectory,
+    save_path=None
+):
 
-    X = []
+    vectors = []
 
-    for t in traj:
-        X.append(t.flatten())
+    for step in trajectory:
 
-    X = np.stack(X)
+        step = (
+            step[0]
+            .detach()
+            .cpu()
+        )
 
-    pca = PCA(n_components=2)
+        vectors.append(step)
 
-    Z = pca.fit_transform(X)
+    vectors = torch.cat(
+        vectors,
+        dim=0
+    )
 
-    plt.figure(figsize=(8, 6))
+    pca = PCA(
+        n_components=2
+    )
 
-    plt.plot(Z[:, 0], Z[:, 1], marker="o")
+    coords = pca.fit_transform(
+        vectors.numpy()
+    )
 
-    plt.title("Hypothesis Evolution Trajectory")
+    plt.figure(
+        figsize=(7, 7)
+    )
+
+    plt.scatter(
+        coords[:, 0],
+        coords[:, 1]
+    )
+
+    plt.plot(
+        coords[:, 0],
+        coords[:, 1]
+    )
+
+    plt.xlabel(
+        "PC1"
+    )
+
+    plt.ylabel(
+        "PC2"
+    )
+
+    plt.title(
+        "Persistent Hypothesis Trajectory"
+    )
+
+    if save_path:
+
+        plt.savefig(
+            save_path,
+            bbox_inches="tight"
+        )
 
     plt.show()

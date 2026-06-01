@@ -1,6 +1,8 @@
 import torch
 
-from torch.utils.data import DataLoader
+from torch.utils.data import (
+    DataLoader
+)
 
 from training.dataset import (
     QAIRDataset,
@@ -8,26 +10,30 @@ from training.dataset import (
     DIM
 )
 
-from training.train import Trainer
+from training.train import (
+    Trainer
+)
 
-from models.full_model import QAIRvNext
+from models.full_model import (
+    QAIRvNext
+)
 
-# ============================================================
-# DEVICE
-# ============================================================
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = (
+    "cuda"
+    if torch.cuda.is_available()
+    else "cpu"
+)
 
-# ============================================================
-# ABLATIONS
-# ============================================================
 
 ABLATIONS = {
 
     "A1_baseline": {
 
         "use_quantum": False,
+
         "use_validator": False,
+
         "persistent_steps": 1
 
     },
@@ -35,7 +41,19 @@ ABLATIONS = {
     "A8_full_hybrid": {
 
         "use_quantum": True,
+
         "use_validator": True,
+
+        "persistent_steps": 3
+
+    },
+
+    "A9_validator": {
+
+        "use_quantum": False,
+
+        "use_validator": True,
+
         "persistent_steps": 3
 
     },
@@ -43,23 +61,20 @@ ABLATIONS = {
     "A10_persistent": {
 
         "use_quantum": True,
+
         "use_validator": True,
+
         "persistent_steps": 5
 
     }
 }
 
-# ============================================================
-# RUN
-# ============================================================
 
 def run_ablation_suite():
 
-    print("[qAIR-vNext] Preparing datasets...")
-
     train_ds = QAIRDataset(
         split="train",
-        max_samples=400
+        max_samples=500
     )
 
     val_ds = QAIRDataset(
@@ -81,31 +96,29 @@ def run_ablation_suite():
         collate_fn=collate_fn
     )
 
-    print(
-        f"Train={len(train_ds)} | "
-        f"Val={len(val_ds)}"
-    )
-
-    # ========================================================
-    # ABLATIONS
-    # ========================================================
-
     for name, cfg in ABLATIONS.items():
 
-        print("\\n" + "="*60)
+        print(
+            "\n" + "=" * 60
+        )
+
         print(name)
-        print(cfg)
-        print("="*60)
 
         model = QAIRvNext(
 
             dim=DIM,
 
-            use_quantum=cfg["use_quantum"],
+            use_quantum=cfg[
+                "use_quantum"
+            ],
 
-            use_validator=cfg["use_validator"],
+            use_validator=cfg[
+                "use_validator"
+            ],
 
-            persistent_steps=cfg["persistent_steps"]
+            persistent_steps=cfg[
+                "persistent_steps"
+            ]
 
         ).to(device)
 
@@ -121,10 +134,10 @@ def run_ablation_suite():
 
             ckpt_dir="./ckpt",
 
-            meta_dir="./meta",
-
             name=name
 
         )
 
-        trainer.train(epochs=5)
+        trainer.train(
+            epochs=5
+        )

@@ -1,30 +1,51 @@
 import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
+import torch
 
 
-def plot_attention_map(attn_weights, title="Attention Interaction Map"):
+def plot_attention_map(
+    attention,
+    save_path=None
+):
 
-    """
-    attn_weights:
-        shape = (K, K)
-        or averaged attention matrix
-    """
+    if isinstance(
+        attention,
+        torch.Tensor
+    ):
+        attention = (
+            attention
+            .detach()
+            .cpu()
+            .numpy()
+        )
 
-    attn_weights = np.array(attn_weights)
-
-    plt.figure(figsize=(8, 6))
-
-    sns.heatmap(
-        attn_weights,
-        annot=True,
-        fmt=".2f",
-        cmap="viridis"
+    plt.figure(
+        figsize=(6, 6)
     )
 
-    plt.title(title)
+    plt.imshow(
+        attention,
+        aspect="auto"
+    )
 
-    plt.xlabel("Target Hypothesis")
-    plt.ylabel("Source Hypothesis")
+    plt.colorbar()
+
+    plt.xlabel(
+        "Hypothesis"
+    )
+
+    plt.ylabel(
+        "Hypothesis"
+    )
+
+    plt.title(
+        "Hypothesis Interaction Attention"
+    )
+
+    if save_path:
+
+        plt.savefig(
+            save_path,
+            bbox_inches="tight"
+        )
 
     plt.show()

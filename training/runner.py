@@ -1,6 +1,8 @@
 import torch
 
-from torch.utils.data import DataLoader
+from torch.utils.data import (
+    DataLoader
+)
 
 from training.dataset import (
     QAIRDataset,
@@ -8,55 +10,61 @@ from training.dataset import (
     DIM
 )
 
-from training.train import Trainer
+from training.train import (
+    Trainer
+)
 
-from models.full_model import QAIRvNext
+from models.full_model import (
+    QAIRvNext
+)
 
-# ============================================================
-# DEVICE
-# ============================================================
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = (
+    "cuda"
+    if torch.cuda.is_available()
+    else "cpu"
+)
 
-# ============================================================
-# TRAINING
-# ============================================================
 
 def run_training(
 
-    benchmark="arc",
+    cache_dir="./cache",
 
-    epochs=5,
+    ckpt_dir="./ckpt",
 
-    max_samples=500
+    train_samples=500,
+
+    val_samples=100,
+
+    epochs=5
 
 ):
 
     print("=" * 60)
-    print("TRAINING PIPELINE")
+    print("qAIR-V28 TRAINING")
     print("=" * 60)
 
     # ========================================================
-    # DATASET
+    # DATASETS
     # ========================================================
 
     train_ds = QAIRDataset(
 
-        benchmark=benchmark,
-
         split="train",
 
-        max_samples=max_samples
+        max_samples=train_samples,
+
+        cache_dir=cache_dir
 
     )
 
     val_ds = QAIRDataset(
 
-        benchmark=benchmark,
-
         split="validation",
 
-        max_samples=max_samples // 4
+        max_samples=val_samples,
+
+        cache_dir=cache_dir
 
     )
 
@@ -88,8 +96,13 @@ def run_training(
 
     )
 
-    print(f"Train Samples : {len(train_ds)}")
-    print(f"Val Samples   : {len(val_ds)}")
+    print(
+        f"Train Samples : {len(train_ds)}"
+    )
+
+    print(
+        f"Val Samples   : {len(val_ds)}"
+    )
 
     # ========================================================
     # MODEL
@@ -121,11 +134,9 @@ def run_training(
 
         device=device,
 
-        ckpt_dir="./ckpt",
+        ckpt_dir=ckpt_dir,
 
-        meta_dir="./meta",
-
-        name=f"qair_{benchmark}"
+        name="qair_v28"
 
     )
 
@@ -133,4 +144,6 @@ def run_training(
     # TRAIN
     # ========================================================
 
-    trainer.train(epochs=epochs)
+    trainer.train(
+        epochs=epochs
+    )

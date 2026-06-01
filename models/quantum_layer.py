@@ -22,133 +22,63 @@ class QuantumEvolutionLayer(nn.Module):
 
         super().__init__()
 
-        self.dim = dim
-
-        self.n_qubits = n_qubits
-
-        # ====================================================
-        # PROJECTION
-        # ====================================================
-
         self.compress = nn.Linear(
-
             dim,
-
             n_qubits
-
         )
 
-        # ====================================================
-        # QUANTUM WEIGHTS
-        # ====================================================
-
-        self.weights = nn.Parameter(
-
-            torch.randn(
-
-                n_layers,
-
-                n_qubits,
-
-                3
-
-            ) * 0.1
-
-        )
-
-        # ====================================================
-        # DEVICE
-        # ====================================================
-
-        self.dev = qml.device(
-
+        dev = qml.device(
             "default.qubit",
-
             wires=n_qubits
-
         )
-
-        # ====================================================
-        # CIRCUIT
-        # ====================================================
 
         @qml.qnode(
-
-            self.dev,
-
-            interface="torch",
-
-            diff_method="backprop"
-
+            dev,
+            interface="torch"
         )
-
-        def circuit(x, w):
-
-            # --------------------------------------------
-            # SUPERPOSITION
-            # --------------------------------------------
+        def circuit(inputs, weights):
 
             for i in range(n_qubits):
-
                 qml.Hadamard(wires=i)
 
-            # --------------------------------------------
-            # ENCODING
-            # --------------------------------------------
-
-            for i in range(n_qubits):
-
-                qml.RY(x[i], wires=i)
-
-                qml.RZ(x[i], wires=i)
-
-            # --------------------------------------------
-            # ENTANGLEMENT
-            # --------------------------------------------
+            qml.AngleEmbedding(
+                inputs,
+                wires=range(n_qubits)
+            )
 
             qml.StronglyEntanglingLayers(
-
-                w,
-
+                weights,
                 wires=range(n_qubits)
-
             )
 
             return [
-
-                qml.expval(qml.PauliZ(i))
-
+                qml.expval(
+                    qml.PauliZ(i)
+                )
                 for i in range(n_qubits)
-
             ]
 
-        self.circuit = circuit
+        weight_shapes = {
+            "weights": (
+                n_layers,
+                n_qubits,
+                3
+            )
+        }
 
-        # ====================================================
-        # EXPAND
-        # ====================================================
-
-        self.expand = nn.Linear(
-
-            n_qubits,
-
-            dim
-
+        self.quantum = qml.qnn.TorchLayer(
+            circuit,
+            weight_shapes
         )
 
-    # ========================================================
-    # FORWARD
-    # ========================================================
+        self.expand = nn.Linear(
+            n_qubits,
+            dim
+        )
 
     def forward(self, H):
 
         B, K, D = H.shape
-
-        device = H.device
-
-        # ----------------------------------------------------
-        # COMPRESS
-        # ----------------------------------------------------
 
         z = self.compress(
 
@@ -158,55 +88,7 @@ class QuantumEvolutionLayer(nn.Module):
 
         z = torch.tanh(z) * math.pi
 
-        # ----------------------------------------------------
-        # QUANTUM
-        # ----------------------------------------------------
-
-        outs = []
-
-        for i in range(z.shape[0]):
-
-            # --------------------------------------------
-            # MOVE TO CPU
-            # --------------------------------------------
-
-            x_cpu = z[i].detach().cpu()
-
-            w_cpu = self.weights.detach().cpu()
-
-            # --------------------------------------------
-            # CIRCUIT
-            # --------------------------------------------
-
-            q = self.circuit(
-
-                x_cpu,
-
-                w_cpu
-
-            )
-
-            q = torch.tensor(
-
-                q,
-
-                dtype=torch.float32
-
-            )
-
-            outs.append(q)
-
-        q = torch.stack(outs)
-
-        # ----------------------------------------------------
-        # MOVE BACK TO ORIGINAL DEVICE
-        # ----------------------------------------------------
-
-        q = q.to(device)
-
-        # ----------------------------------------------------
-        # EXPAND
-        # ----------------------------------------------------
+        q = self.quantum(z)
 
         q = self.expand(q)
 
