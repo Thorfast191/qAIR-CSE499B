@@ -1,50 +1,32 @@
 import os
-
 import torch
 
-from training.losses import (
-    compute_loss
-)
+from tqdm.auto import tqdm
 
-from training.evaluate import (
-    evaluate
-)
+from training.losses import compute_loss
+from training.evaluate import evaluate
 
 
 class Trainer:
 
     def __init__(
-
         self,
-
         model,
-
         train_loader,
-
         val_loader,
-
         device,
-
         ckpt_dir,
-
         name
-
     ):
 
         self.model = model
 
-        self.train_loader = (
-            train_loader
-        )
-
-        self.val_loader = (
-            val_loader
-        )
+        self.train_loader = train_loader
+        self.val_loader = val_loader
 
         self.device = device
 
         self.ckpt_dir = ckpt_dir
-
         self.name = name
 
         os.makedirs(
@@ -52,12 +34,44 @@ class Trainer:
             exist_ok=True
         )
 
-        self.optim = (
-            torch.optim.AdamW(
-                model.parameters(),
-                lr=1e-4
-            )
+        self.optim = torch.optim.AdamW(
+            model.parameters(),
+            lr=1e-4
         )
+
+    # =====================================================
+    # SAVE
+    # =====================================================
+
+    def save_checkpoint(
+        self,
+        epoch,
+        best=False
+    ):
+
+        filename = (
+            f"{self.name}_best.pt"
+            if best
+            else f"{self.name}_latest.pt"
+        )
+
+        path = os.path.join(
+            self.ckpt_dir,
+            filename
+        )
+
+        torch.save(
+            {
+                "epoch": epoch,
+                "model": self.model.state_dict(),
+                "optimizer": self.optim.state_dict()
+            },
+            path
+        )
+
+    # =====================================================
+    # TRAIN
+    # =====================================================
 
     def train(
         self,
@@ -66,17 +80,18 @@ class Trainer:
 
         best_acc = 0.0
 
-        for epoch in range(
-            epochs
-        ):
+        for epoch in range(epochs):
 
             self.model.train()
 
-            total_loss = 0
+            total_loss = 0.0
 
-            for batch in (
-                self.train_loader
-            ):
+            pbar = tqdm(
+                self.train_loader,
+                desc=f"Epoch {epoch+1}/{epochs}"
+            )
+
+            for batch in pbar:
 
                 H = batch["H"].to(
                     self.device
@@ -90,13 +105,13 @@ class Trainer:
                     self.device
                 )
 
-                out = self.model(
+                outputs = self.model(
                     H,
                     O
                 )
 
                 loss = compute_loss(
-                    out,
+                    outputs,
                     y
                 )
 
@@ -111,79 +126,76 @@ class Trainer:
 
                 self.optim.step()
 
-                total_loss += (
-                    loss.item()
+                total_loss += loss.item()
+
+                pbar.set_postfix(
+                    {
+                        "loss":
+                        f"{loss.item():.4f}"
+                    }
                 )
+
+            avg_loss = (
+                total_loss /
+                len(self.train_loader)
+            )
 
             metrics = evaluate(
-
                 self.model,
-
                 self.val_loader,
-
                 self.device
+            )
 
+            print("\n" + "=" * 60)
+
+            print(
+                f"Epoch {epoch+1}/{epochs}"
             )
 
             print(
-                f"\nEpoch {epoch+1}"
+                f"Train Loss : "
+                f"{avg_loss:.4f}"
             )
 
             print(
-                f"Loss={total_loss:.4f}"
+                f"Val Acc    : "
+                f"{metrics['acc']:.4f}"
             )
 
             print(
-                f"Acc={metrics['acc']:.4f}"
+                f"Entropy    : "
+                f"{metrics['entropy']:.4f}"
             )
 
             print(
-                f"Entropy={metrics['entropy']:.4f}"
+                f"Diversity  : "
+                f"{metrics['diversity']:.4f}"
             )
 
             print(
-                f"Diversity={metrics['diversity']:.4f}"
+                f"Spread     : "
+                f"{metrics['spread']:.4f}"
             )
 
-            ckpt_path = os.path.join(
-
-                self.ckpt_dir,
-
-                f"{self.name}_latest.pt"
-
+            self.save_checkpoint(
+                epoch,
+                best=False
             )
 
-            torch.save(
+            if metrics["acc"] > best_acc:
 
-                self.model.state_dict(),
+                best_acc = metrics["acc"]
 
-                ckpt_path
-
-            )
-
-            if (
-                metrics["acc"]
-                > best_acc
-            ):
-
-                best_acc = (
-                    metrics["acc"]
+                self.save_checkpoint(
+                    epoch,
+                    best=True
                 )
 
-                best_path = (
-                    os.path.join(
-
-                        self.ckpt_dir,
-
-                        f"{self.name}_best.pt"
-
-                    )
+                print(
+                    f"[BEST] "
+                    f"{best_acc:.4f}"
                 )
 
-                torch.save(
-
-                    self.model.state_dict(),
-
-                    best_path
-
-                )
+        print(
+            "\nTraining Complete."
+        )

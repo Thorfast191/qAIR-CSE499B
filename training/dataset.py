@@ -1,6 +1,8 @@
 import os
+import time
 import torch
 
+from tqdm.auto import tqdm
 from torch.utils.data import Dataset
 
 from benchmarks.arc import load_arc
@@ -67,6 +69,8 @@ class QAIRDataset(Dataset):
             f"[CACHE MISSING] Building {split} cache..."
         )
 
+        start_time = time.time()
+
         generator = HypothesisGenerator()
 
         encoder = HypothesisEncoder()
@@ -81,15 +85,28 @@ class QAIRDataset(Dataset):
             ):
                 split = "test"
 
+            elif "validation" in ds:
+                split = "validation"
+
+            else:
+                split = list(ds.keys())[0]
+
         raw = ds[split]
 
         count = 0
 
-        for ex in raw:
+        for ex in tqdm(
+            raw,
+            desc=f"Building {split} cache"
+        ):
 
             try:
 
                 question = ex["question"]
+
+                # ============================================
+                # ARC FORMAT
+                # ============================================
 
                 if isinstance(question, dict):
 
@@ -111,6 +128,13 @@ class QAIRDataset(Dataset):
 
                     labels = choices["label"]
 
+                # ============================================
+                # FILTERS
+                # ============================================
+
+                if len(options) < 2:
+                    continue
+
                 answer = ex["answerKey"]
 
                 if answer not in labels:
@@ -119,7 +143,7 @@ class QAIRDataset(Dataset):
                 y = labels.index(answer)
 
                 # ============================================
-                # HYPOTHESES
+                # HYPOTHESIS GENERATION
                 # ============================================
 
                 hypotheses = generator.generate(
@@ -139,6 +163,10 @@ class QAIRDataset(Dataset):
                     options
                 ).cpu()
 
+                # ============================================
+                # SAMPLE
+                # ============================================
+
                 sample = {
 
                     "question": stem,
@@ -155,15 +183,26 @@ class QAIRDataset(Dataset):
 
                 }
 
-                self.samples.append(sample)
+                self.samples.append(
+                    sample
+                )
 
                 count += 1
 
-                if count % 25 == 0:
+                # ============================================
+                # PERIODIC SAVE
+                # ============================================
+
+                if count % 50 == 0:
+
+                    torch.save(
+                        self.samples,
+                        cache_path
+                    )
 
                     print(
-                        f"[{split}] "
-                        f"{count}/{max_samples}"
+                        f"[AUTOSAVE] "
+                        f"{count} samples"
                     )
 
                 if count >= max_samples:
@@ -175,14 +214,21 @@ class QAIRDataset(Dataset):
                     f"[SKIP] {e}"
                 )
 
+                continue
+
         # ====================================================
-        # SAVE CACHE
+        # FINAL SAVE
         # ====================================================
 
         torch.save(
             self.samples,
             cache_path
         )
+
+        elapsed = (
+            time.time()
+            - start_time
+        ) / 60
 
         print(
             f"[CACHE SAVED] "
@@ -192,6 +238,11 @@ class QAIRDataset(Dataset):
         print(
             f"[TOTAL SAMPLES] "
             f"{len(self.samples)}"
+        )
+
+        print(
+            f"[BUILD TIME] "
+            f"{elapsed:.2f} min"
         )
 
     def __len__(self):

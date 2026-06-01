@@ -1,48 +1,39 @@
 import torch
 
+from tqdm.auto import tqdm
+
 
 @torch.no_grad()
 def evaluate(
-
     model,
-
     loader,
-
     device
-
 ):
 
     model.eval()
 
     correct = 0
-
     total = 0
 
     spreads = []
-
     entropies = []
-
     diversities = []
 
-    for batch in loader:
+    for batch in tqdm(
+        loader,
+        desc="Validation",
+        leave=False
+    ):
 
-        H = batch["H"].to(
-            device
-        )
-
-        O = batch["O"].to(
-            device
-        )
-
-        y = batch["y"].to(
-            device
-        )
+        H = batch["H"].to(device)
+        O = batch["O"].to(device)
+        y = batch["y"].to(device)
 
         out = model(H, O)
 
-        pred = out[
-            "scores"
-        ].argmax(dim=1)
+        pred = out["scores"].argmax(
+            dim=1
+        )
 
         correct += (
             pred == y
@@ -50,14 +41,11 @@ def evaluate(
 
         total += y.size(0)
 
-        spread = out[
-            "hypothesis_energy"
-        ].var(
-            dim=1
-        ).mean()
-
         spreads.append(
-            spread.item()
+            out["hypothesis_energy"]
+            .var(dim=1)
+            .mean()
+            .item()
         )
 
         entropies.append(
