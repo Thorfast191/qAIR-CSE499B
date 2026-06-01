@@ -6,7 +6,7 @@ from transformers import (
 import torch
 
 
-LLM_NAME = "google/gemma-2-2b-it"
+LLM_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
 
 
 class HypothesisGenerator:
