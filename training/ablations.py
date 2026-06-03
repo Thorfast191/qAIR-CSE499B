@@ -67,34 +67,60 @@ ABLATIONS = {
         "persistent_steps": 5
 
     }
+
 }
 
 
-def run_ablation_suite():
+def run_ablation_suite(
+    cache_dir,
+    ckpt_dir
+):
 
     train_ds = QAIRDataset(
+
         split="train",
-        max_samples=500
+
+        max_samples=500,
+
+        cache_dir=cache_dir
+
     )
 
     val_ds = QAIRDataset(
+
         split="validation",
-        max_samples=100
+
+        max_samples=100,
+
+        cache_dir=cache_dir
+
     )
 
     train_loader = DataLoader(
+
         train_ds,
+
         batch_size=8,
+
         shuffle=True,
+
         collate_fn=collate_fn
+
     )
 
     val_loader = DataLoader(
+
         val_ds,
+
         batch_size=8,
+
         shuffle=False,
+
         collate_fn=collate_fn
+
     )
+
+    results = {}
 
     for name, cfg in ABLATIONS.items():
 
@@ -102,7 +128,9 @@ def run_ablation_suite():
             "\n" + "=" * 60
         )
 
-        print(name)
+        print(
+            f"Running {name}"
+        )
 
         model = QAIRvNext(
 
@@ -132,7 +160,7 @@ def run_ablation_suite():
 
             device=device,
 
-            ckpt_dir="./ckpt",
+            ckpt_dir=ckpt_dir,
 
             name=name
 
@@ -141,3 +169,22 @@ def run_ablation_suite():
         trainer.train(
             epochs=5
         )
+
+        results[name] = {
+
+            "use_quantum":
+                cfg["use_quantum"],
+
+            "use_validator":
+                cfg["use_validator"],
+
+            "persistent_steps":
+                cfg["persistent_steps"]
+
+        }
+
+    print(
+        "\nAblation Suite Complete."
+    )
+
+    return results
