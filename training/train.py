@@ -40,7 +40,7 @@ class Trainer:
         )
 
     # =====================================================
-    # SAVE
+    # SAVE CHECKPOINT
     # =====================================================
 
     def save_checkpoint(
@@ -70,6 +70,25 @@ class Trainer:
         )
 
     # =====================================================
+    # SAVE HISTORY
+    # =====================================================
+
+    def save_history(
+        self,
+        history
+    ):
+
+        torch.save(
+
+            history,
+
+            os.path.join(
+                self.ckpt_dir,
+                "history.pt"
+            )
+        )
+
+    # =====================================================
     # TRAIN
     # =====================================================
 
@@ -80,6 +99,20 @@ class Trainer:
 
         best_acc = 0.0
 
+        history = {
+
+            "loss": [],
+
+            "acc": [],
+
+            "entropy": [],
+
+            "diversity": [],
+
+            "spread": []
+
+        }
+
         for epoch in range(epochs):
 
             self.model.train()
@@ -87,8 +120,11 @@ class Trainer:
             total_loss = 0.0
 
             pbar = tqdm(
+
                 self.train_loader,
+
                 desc=f"Epoch {epoch+1}/{epochs}"
+
             )
 
             for batch in pbar:
@@ -141,12 +177,46 @@ class Trainer:
             )
 
             metrics = evaluate(
+
                 self.model,
+
                 self.val_loader,
+
                 self.device
+
             )
 
-            print("\n" + "=" * 60)
+            # ============================================
+            # HISTORY
+            # ============================================
+
+            history["loss"].append(
+                avg_loss
+            )
+
+            history["acc"].append(
+                metrics["acc"]
+            )
+
+            history["entropy"].append(
+                metrics["entropy"]
+            )
+
+            history["diversity"].append(
+                metrics["diversity"]
+            )
+
+            history["spread"].append(
+                metrics["spread"]
+            )
+
+            self.save_history(
+                history
+            )
+
+            print(
+                "\n" + "=" * 60
+            )
 
             print(
                 f"Epoch {epoch+1}/{epochs}"
