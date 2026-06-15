@@ -1,8 +1,13 @@
+import os
 import torch
 
 from torch.utils.data import DataLoader
 
-from training.dataset import QAIRDataset, collate_fn, DIM
+from training.dataset import (
+    QAIRDataset,
+    collate_fn,
+    DIM,
+)
 
 from training.train import Trainer
 
@@ -35,24 +40,43 @@ ABLATIONS = {
 }
 
 
-def run_ablation_suite(cache_dir, ckpt_dir):
+def run_ablation_suite(
+    cache_dir,
+    ckpt_dir,
+    epochs=5,
+):
 
-    train_ds = QAIRDataset(split="train", max_samples=500, cache_dir=cache_dir)
-
-    val_ds = QAIRDataset(split="validation", max_samples=100, cache_dir=cache_dir)
-
-    train_loader = DataLoader(
-        train_ds, batch_size=8, shuffle=True, collate_fn=collate_fn
+    train_ds = QAIRDataset(
+        split="train",
+        max_samples=500,
+        cache_dir=cache_dir,
     )
 
-    val_loader = DataLoader(val_ds, batch_size=8, shuffle=False, collate_fn=collate_fn)
+    val_ds = QAIRDataset(
+        split="validation",
+        max_samples=100,
+        cache_dir=cache_dir,
+    )
+
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=8,
+        shuffle=True,
+        collate_fn=collate_fn,
+    )
+
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=8,
+        shuffle=False,
+        collate_fn=collate_fn,
+    )
 
     results = {}
 
     for name, cfg in ABLATIONS.items():
 
         print("\n" + "=" * 60)
-
         print(f"Running {name}")
 
         model = QAIRvNext(
@@ -71,13 +95,60 @@ def run_ablation_suite(cache_dir, ckpt_dir):
             name=name,
         )
 
-        trainer.train(epochs=5)
+        latest_ckpt = os.path.join(
+            ckpt_dir,
+            f"{name}_latest.pt",
+        )
 
-        results[name] = {
-            "use_quantum": cfg["use_quantum"],
-            "use_validator": cfg["use_validator"],
-            "persistent_steps": cfg["persistent_steps"],
-        }
+        start_epoch = 0
+
+        print("\nCheckpoint Search:")
+        print(latest_ckpt)
+        print("Exists:", os.path.exists(latest_ckpt))
+
+        if os.path.exists(latest_ckpt):
+
+            print(f"\n[RESUME {name}]")
+
+            ckpt = torch.load(
+                latest_ckpt,
+                map_location=device,
+            )
+
+            model.load_state_dict(
+                ckpt["model"]
+            )
+
+            trainer.optim.load_state_dict(
+                ckpt["optimizer"]
+            )
+
+            start_epoch = (
+                ckpt["epoch"] + 1
+            )
+
+            print(
+                f"Resuming from epoch "
+                f"{start_epoch}"
+            )
+
+        if start_epoch >= epochs:
+
+            print(
+                f"[SKIP] {name} already "
+                f"finished {epochs} epochs."
+            )
+
+            results[name] = cfg
+
+            continue
+
+        trainer.train(
+            epochs=epochs,
+            start_epoch=start_epoch,
+        )
+
+        results[name] = cfg
 
     print("\nAblation Suite Complete.")
 
