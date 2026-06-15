@@ -29,7 +29,7 @@ class Trainer:
     # SAVE CHECKPOINT
     # =====================================================
 
-    def save_checkpoint(self, epoch, best=False):
+    def save_checkpoint(self, epoch, best_acc,  best=False):
 
         filename = f"{self.name}_best.pt" if best else f"{self.name}_latest.pt"
 
@@ -38,6 +38,7 @@ class Trainer:
         torch.save(
             {
                 "epoch": epoch,
+                "best_acc": best_acc,
                 "model": self.model.state_dict(),
                 "optimizer": self.optim.state_dict(),
             },
@@ -59,6 +60,34 @@ class Trainer:
     def train(self, epochs=5, start_epoch=0):
 
         best_acc = 0.0
+
+        best_path = os.path.join( self.ckpt_dir,  f"{self.name}_best.pt")
+
+        if os.path.exists(best_path):
+
+            try:
+
+                best_ckpt = torch.load(
+                    best_path,
+                    map_location="cpu"
+                )
+
+                if "best_acc" in best_ckpt:
+
+                    best_acc = best_ckpt[
+                        "best_acc"
+                    ]
+
+                    print(
+                        f"[BEST ACC RESTORED] "
+                        f"{best_acc:.4f}"
+                    )
+
+            except Exception as e:
+                print(
+                    f"[WARNING] Could not load "
+                    f"best_acc: {e}"
+                )
 
         history = {"loss": [], "acc": [], "entropy": [], "diversity": [], "spread": []}
 
@@ -141,13 +170,13 @@ class Trainer:
 
             print(f"Spread     : " f"{metrics['spread']:.4f}")
 
-            self.save_checkpoint(epoch, best=False)
+            self.save_checkpoint(epoch, best_acc, best=False)
 
             if metrics["acc"] > best_acc:
 
                 best_acc = metrics["acc"]
 
-                self.save_checkpoint(epoch, best=True)
+                self.save_checkpoint(epoch, best_acc, best=True)
 
                 print(f"[BEST] " f"{best_acc:.4f}")
 

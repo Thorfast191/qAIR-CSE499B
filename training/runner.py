@@ -67,7 +67,17 @@ def run_training(
         use_quantum=True,
         use_validator=True,
         persistent_steps=3,
+
     ).to(device)
+
+    trainer = Trainer(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=device,
+        ckpt_dir=ckpt_dir,
+        name="qair_v28",
+    )
 
     latest_ckpt = os.path.join(
         ckpt_dir,
@@ -75,13 +85,15 @@ def run_training(
     )
 
     start_epoch = 0
+    print("\nCheckpoint Search:")
+    print(latest_ckpt)
+    print("Exists:", os.path.exists(latest_ckpt))
+
+
 
     if os.path.exists(latest_ckpt):
 
-        print(
-            f"\n[RESUME] Loading checkpoint:"
-        )
-
+        print("\n[RESUME] Loading checkpoint:")
         print(latest_ckpt)
 
         ckpt = torch.load(
@@ -93,24 +105,19 @@ def run_training(
             ckpt["model"]
         )
 
-        start_epoch = (
-            ckpt["epoch"] + 1
+        trainer.optim.load_state_dict(
+            ckpt["optimizer"]
         )
 
+        start_epoch = ckpt["epoch"] + 1
         print(
-            f"Resuming from epoch "
-            f"{start_epoch}"
+            f"Resuming from epoch {start_epoch}"
         )
 
-    trainer = Trainer(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        device=device,
-        ckpt_dir=ckpt_dir,
-        name="qair_v28",
+    print(
+        f"\nTraining from epoch "
+        f"{start_epoch} to {epochs}"
     )
-
     trainer.train(
         epochs=epochs,
         start_epoch=start_epoch,
