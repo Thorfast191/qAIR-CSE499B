@@ -13,12 +13,7 @@ from training.train import Trainer
 
 from models.full_model import QAIRvNext
 
-
-device = (
-    "cuda"
-    if torch.cuda.is_available()
-    else "cpu"
-)
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def run_training(
@@ -67,7 +62,6 @@ def run_training(
         use_quantum=True,
         use_validator=True,
         persistent_steps=3,
-
     ).to(device)
 
     trainer = Trainer(
@@ -89,8 +83,6 @@ def run_training(
     print(latest_ckpt)
     print("Exists:", os.path.exists(latest_ckpt))
 
-
-
     if os.path.exists(latest_ckpt):
 
         print("\n[RESUME] Loading checkpoint:")
@@ -101,23 +93,14 @@ def run_training(
             map_location=device,
         )
 
-        model.load_state_dict(
-            ckpt["model"]
-        )
+        model.load_state_dict(ckpt["model"])
 
-        trainer.optim.load_state_dict(
-            ckpt["optimizer"]
-        )
+        trainer.optim.load_state_dict(ckpt["optimizer"])
 
         start_epoch = ckpt["epoch"] + 1
-        print(
-            f"Resuming from epoch {start_epoch}"
-        )
+        print(f"Resuming from epoch {start_epoch}")
 
-    print(
-        f"\nTraining from epoch "
-        f"{start_epoch} to {epochs}"
-    )
+    print(f"\nTraining from epoch " f"{start_epoch} to {epochs}")
     trainer.train(
         epochs=epochs,
         start_epoch=start_epoch,

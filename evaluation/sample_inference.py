@@ -3,7 +3,6 @@ import torch
 from models.generator import HypothesisGenerator
 from models.encoder import HypothesisEncoder
 
-
 TEST_SAMPLES = [
     {
         "question": "What gas do plants absorb from the atmosphere?",
@@ -123,38 +122,19 @@ def run_sample_evaluation(model, device):
         options = sample["options"]
         answer = sample["answer"]
 
-        hypotheses = generator.generate(
-            question,
-            options
-        )
+        hypotheses = generator.generate(question, options)
 
-        H = encoder.encode(
-            hypotheses
-        ).unsqueeze(0)
+        H = encoder.encode(hypotheses).unsqueeze(0)
 
-        O = encoder.encode(
-            options
-        ).unsqueeze(0)
+        O = encoder.encode(options).unsqueeze(0)
 
         with torch.no_grad():
 
-            outputs = model(
-                H.to(device),
-                O.to(device)
-            )
+            outputs = model(H.to(device), O.to(device))
 
-        pred = outputs[
-            "scores"
-        ].argmax(
-            dim=-1
-        ).item()
+        pred = outputs["scores"].argmax(dim=-1).item()
 
-        collapse = (
-            outputs["collapse_probs"][0]
-            .detach()
-            .cpu()
-            .numpy()
-        )
+        collapse = outputs["collapse_probs"][0].detach().cpu().numpy()
 
         is_correct = pred == answer
 

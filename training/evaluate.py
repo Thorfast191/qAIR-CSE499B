@@ -36,7 +36,7 @@ def evaluate(model, loader, device):
 
         diversities.append(out["diversity"].item())
 
-        collapse_peak = (out["collapse_probs"].max(dim=1)[0].mean().item())
+        collapse_peak = out["collapse_probs"].max(dim=1)[0].mean().item()
 
         collapse_peaks.append(collapse_peak)
 

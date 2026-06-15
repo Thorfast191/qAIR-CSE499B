@@ -115,29 +115,17 @@ def run_ablation_suite(
                 map_location=device,
             )
 
-            model.load_state_dict(
-                ckpt["model"]
-            )
+            model.load_state_dict(ckpt["model"])
 
-            trainer.optim.load_state_dict(
-                ckpt["optimizer"]
-            )
+            trainer.optim.load_state_dict(ckpt["optimizer"])
 
-            start_epoch = (
-                ckpt["epoch"] + 1
-            )
+            start_epoch = ckpt["epoch"] + 1
 
-            print(
-                f"Resuming from epoch "
-                f"{start_epoch}"
-            )
+            print(f"Resuming from epoch " f"{start_epoch}")
 
         if start_epoch >= epochs:
 
-            print(
-                f"[SKIP] {name} already "
-                f"finished {epochs} epochs."
-            )
+            print(f"[SKIP] {name} already " f"finished {epochs} epochs.")
 
             results[name] = cfg
 

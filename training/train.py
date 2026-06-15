@@ -29,7 +29,7 @@ class Trainer:
     # SAVE CHECKPOINT
     # =====================================================
 
-    def save_checkpoint(self, epoch, best_acc,  best=False):
+    def save_checkpoint(self, epoch, best_acc, best=False):
 
         filename = f"{self.name}_best.pt" if best else f"{self.name}_latest.pt"
 
@@ -61,37 +61,33 @@ class Trainer:
 
         best_acc = 0.0
 
-        best_path = os.path.join( self.ckpt_dir,  f"{self.name}_best.pt")
+        best_path = os.path.join(self.ckpt_dir, f"{self.name}_best.pt")
 
         if os.path.exists(best_path):
 
             try:
 
-                best_ckpt = torch.load(
-                    best_path,
-                    map_location="cpu"
-                )
+                best_ckpt = torch.load(best_path, map_location="cpu")
 
                 if "best_acc" in best_ckpt:
 
-                    best_acc = best_ckpt[
-                        "best_acc"
-                    ]
+                    best_acc = best_ckpt["best_acc"]
 
-                    print(
-                        f"[BEST ACC RESTORED] "
-                        f"{best_acc:.4f}"
-                    )
+                    print(f"[BEST ACC RESTORED] " f"{best_acc:.4f}")
 
             except Exception as e:
-                print(
-                    f"[WARNING] Could not load "
-                    f"best_acc: {e}"
-                )
+                print(f"[WARNING] Could not load " f"best_acc: {e}")
 
-        history = {"loss": [], "acc": [], "entropy": [], "diversity": [], "spread": [], "collapse_peak": []}
+        history = {
+            "loss": [],
+            "acc": [],
+            "entropy": [],
+            "diversity": [],
+            "spread": [],
+            "collapse_peak": [],
+        }
 
-        for epoch in range(start_epoch,epochs):
+        for epoch in range(start_epoch, epochs):
 
             printed_energy = False
             self.model.train()
@@ -119,11 +115,19 @@ class Trainer:
                         f"max={energy.max().item():.4f} "
                         f"min={energy.min().item():.4f}"
                     )
-                    print(f"[Collapse Peak] "
-                          f"{outputs['collapse_probs'].max(dim=1)[0].mean().item():.4f}")
-                    entropy = -(outputs["collapse_probs"] * torch.log(outputs["collapse_probs"] + 1e-8)).sum(dim=1).mean()
-                    print(f"[Collapse Entropy] "
-                          f"{entropy.item():.4f}")
+                    print(
+                        f"[Collapse Peak] "
+                        f"{outputs['collapse_probs'].max(dim=1)[0].mean().item():.4f}"
+                    )
+                    entropy = (
+                        -(
+                            outputs["collapse_probs"]
+                            * torch.log(outputs["collapse_probs"] + 1e-8)
+                        )
+                        .sum(dim=1)
+                        .mean()
+                    )
+                    print(f"[Collapse Entropy] " f"{entropy.item():.4f}")
 
                     printed_energy = True
 
@@ -155,8 +159,6 @@ class Trainer:
             history["diversity"].append(metrics["diversity"])
             history["spread"].append(metrics["spread"])
             history["collapse_peak"].append(metrics["collapse_peak"])
-            
-            
 
             self.save_history(history)
 
