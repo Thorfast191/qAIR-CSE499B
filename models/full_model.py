@@ -5,6 +5,7 @@ from models.validator import HypothesisValidator
 from models.quantum_layer import QuantumEvolutionLayer
 from models.persistent_reasoner import PersistentReasoner
 from models.collapse import CollapseController
+from models.answer_selector import EnergyAnswerSelector
 
 
 class QAIRvNext(nn.Module):
@@ -51,9 +52,8 @@ class QAIRvNext(nn.Module):
 
         self.collapse = CollapseController()
 
-        self.option_proj = nn.Linear(
+        self.selector = EnergyAnswerSelector(
             dim,
-            dim
         )
 
     def forward(self, H, O):
@@ -106,23 +106,13 @@ class QAIRvNext(nn.Module):
                 
         collapse_out = self.collapse( collapse_energy )
 
-        Oproj = self.option_proj(O)
-
-        scores = torch.einsum(
-
-            "bkd,bod->bko",
-
-            H,
-
-            Oproj
-
-        )
+        scores = self.selector(H, O)
 
         collapse_probs = collapse_out[
             "probabilities"
         ]
 
-        final_scores = (
+        final_energy = (
 
             scores *
 
@@ -131,6 +121,8 @@ class QAIRvNext(nn.Module):
         ).sum(
             dim=1
         )
+
+        final_scores = -final_energy
 
         return {
 
