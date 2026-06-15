@@ -56,13 +56,13 @@ class Trainer:
     # TRAIN
     # =====================================================
 
-    def train(self, epochs=5):
+    def train(self, epochs=5, start_epoch=0):
 
         best_acc = 0.0
 
         history = {"loss": [], "acc": [], "entropy": [], "diversity": [], "spread": []}
 
-        for epoch in range(epochs):
+        for epoch in range(start_epoch,epochs):
 
             printed_energy = False
             self.model.train()

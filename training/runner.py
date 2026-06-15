@@ -1,61 +1,106 @@
+import os
 import torch
 
 from torch.utils.data import DataLoader
 
-from training.dataset import QAIRDataset, collate_fn, DIM
+from training.dataset import (
+    QAIRDataset,
+    collate_fn,
+    DIM,
+)
 
 from training.train import Trainer
 
 from models.full_model import QAIRvNext
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+
+device = (
+    "cuda"
+    if torch.cuda.is_available()
+    else "cpu"
+)
 
 
 def run_training(
-    cache_dir="./cache", ckpt_dir="./ckpt", train_samples=500, val_samples=100, epochs=5
+    cache_dir="./cache",
+    ckpt_dir="./ckpt",
+    train_samples=500,
+    val_samples=100,
+    epochs=5,
 ):
 
     print("=" * 60)
     print("qAIR-V28 TRAINING")
     print("=" * 60)
 
-    # ========================================================
-    # DATASETS
-    # ========================================================
-
     train_ds = QAIRDataset(
-        split="train", max_samples=train_samples, cache_dir=cache_dir
+        split="train",
+        max_samples=train_samples,
+        cache_dir=cache_dir,
     )
 
     val_ds = QAIRDataset(
-        split="validation", max_samples=val_samples, cache_dir=cache_dir
+        split="validation",
+        max_samples=val_samples,
+        cache_dir=cache_dir,
     )
-
-    # ========================================================
-    # LOADERS
-    # ========================================================
 
     train_loader = DataLoader(
-        train_ds, batch_size=8, shuffle=True, collate_fn=collate_fn
+        train_ds,
+        batch_size=8,
+        shuffle=True,
+        collate_fn=collate_fn,
     )
 
-    val_loader = DataLoader(val_ds, batch_size=8, shuffle=False, collate_fn=collate_fn)
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=8,
+        shuffle=False,
+        collate_fn=collate_fn,
+    )
 
     print(f"Train Samples : {len(train_ds)}")
-
     print(f"Val Samples   : {len(val_ds)}")
 
-    # ========================================================
-    # MODEL
-    # ========================================================
-
     model = QAIRvNext(
-        dim=DIM, use_quantum=True, use_validator=True, persistent_steps=3
+        dim=DIM,
+        use_quantum=True,
+        use_validator=True,
+        persistent_steps=3,
     ).to(device)
 
-    # ========================================================
-    # TRAINER
-    # ========================================================
+    latest_ckpt = os.path.join(
+        ckpt_dir,
+        "qair_v28_latest.pt",
+    )
+
+    start_epoch = 0
+
+    if os.path.exists(latest_ckpt):
+
+        print(
+            f"\n[RESUME] Loading checkpoint:"
+        )
+
+        print(latest_ckpt)
+
+        ckpt = torch.load(
+            latest_ckpt,
+            map_location=device,
+        )
+
+        model.load_state_dict(
+            ckpt["model"]
+        )
+
+        start_epoch = (
+            ckpt["epoch"] + 1
+        )
+
+        print(
+            f"Resuming from epoch "
+            f"{start_epoch}"
+        )
 
     trainer = Trainer(
         model=model,
@@ -66,8 +111,7 @@ def run_training(
         name="qair_v28",
     )
 
-    # ========================================================
-    # TRAIN
-    # ========================================================
-
-    trainer.train(epochs=epochs)
+    trainer.train(
+        epochs=epochs,
+        start_epoch=start_epoch,
+    )
