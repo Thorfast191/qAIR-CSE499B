@@ -10,30 +10,18 @@ from benchmarks.arc import load_arc
 from models.generator import HypothesisGenerator
 from models.encoder import HypothesisEncoder
 
-
 DIM = 384
 
 
 class QAIRDataset(Dataset):
 
-    def __init__(
-        self,
-        split="train",
-        max_samples=500,
-        cache_dir="./cache"
-    ):
+    def __init__(self, split="train", max_samples=500, cache_dir="./cache"):
 
         self.samples = []
 
-        os.makedirs(
-            cache_dir,
-            exist_ok=True
-        )
+        os.makedirs(cache_dir, exist_ok=True)
 
-        cache_path = os.path.join(
-            cache_dir,
-            f"arc_{split}.pt"
-        )
+        cache_path = os.path.join(cache_dir, f"arc_{split}.pt")
 
         # ====================================================
         # LOAD CACHE
@@ -41,23 +29,13 @@ class QAIRDataset(Dataset):
 
         if os.path.exists(cache_path):
 
-            print(
-                f"[CACHE FOUND] {cache_path}"
-            )
+            print(f"[CACHE FOUND] {cache_path}")
 
-            self.samples = torch.load(
-                cache_path,
-                map_location="cpu"
-            )
+            self.samples = torch.load(cache_path, map_location="cpu")
 
-            self.samples = self.samples[
-                :max_samples
-            ]
+            self.samples = self.samples[:max_samples]
 
-            print(
-                f"[CACHE LOADED] "
-                f"{len(self.samples)} samples"
-            )
+            print(f"[CACHE LOADED] " f"{len(self.samples)} samples")
 
             return
 
@@ -65,9 +43,7 @@ class QAIRDataset(Dataset):
         # BUILD CACHE
         # ====================================================
 
-        print(
-            f"[CACHE MISSING] Building {split} cache..."
-        )
+        print(f"[CACHE MISSING] Building {split} cache...")
 
         start_time = time.time()
 
@@ -79,10 +55,7 @@ class QAIRDataset(Dataset):
 
         if split not in ds:
 
-            if (
-                split == "validation"
-                and "test" in ds
-            ):
+            if split == "validation" and "test" in ds:
                 split = "test"
 
             elif "validation" in ds:
@@ -95,10 +68,7 @@ class QAIRDataset(Dataset):
 
         count = 0
 
-        for ex in tqdm(
-            raw,
-            desc=f"Building {split} cache"
-        ):
+        for ex in tqdm(raw, desc=f"Building {split} cache"):
 
             try:
 
@@ -146,46 +116,30 @@ class QAIRDataset(Dataset):
                 # HYPOTHESIS GENERATION
                 # ============================================
 
-                hypotheses = generator.generate(
-                    stem,
-                    options
-                )
+                hypotheses = generator.generate(stem, options)
 
                 # ============================================
                 # EMBEDDINGS
                 # ============================================
 
-                H = encoder.encode(
-                    hypotheses
-                ).cpu()
+                H = encoder.encode(hypotheses).cpu()
 
-                O = encoder.encode(
-                    options
-                ).cpu()
+                O = encoder.encode(options).cpu()
 
                 # ============================================
                 # SAMPLE
                 # ============================================
 
                 sample = {
-
                     "question": stem,
-
                     "options": options,
-
                     "hypotheses": hypotheses,
-
                     "H": H,
-
                     "O": O,
-
-                    "y": y
-
+                    "y": y,
                 }
 
-                self.samples.append(
-                    sample
-                )
+                self.samples.append(sample)
 
                 count += 1
 
@@ -195,24 +149,16 @@ class QAIRDataset(Dataset):
 
                 if count % 50 == 0:
 
-                    torch.save(
-                        self.samples,
-                        cache_path
-                    )
+                    torch.save(self.samples, cache_path)
 
-                    print(
-                        f"[AUTOSAVE] "
-                        f"{count} samples"
-                    )
+                    print(f"[AUTOSAVE] " f"{count} samples")
 
                 if count >= max_samples:
                     break
 
             except Exception as e:
 
-                print(
-                    f"[SKIP] {e}"
-                )
+                print(f"[SKIP] {e}")
 
                 continue
 
@@ -220,30 +166,15 @@ class QAIRDataset(Dataset):
         # FINAL SAVE
         # ====================================================
 
-        torch.save(
-            self.samples,
-            cache_path
-        )
+        torch.save(self.samples, cache_path)
 
-        elapsed = (
-            time.time()
-            - start_time
-        ) / 60
+        elapsed = (time.time() - start_time) / 60
 
-        print(
-            f"[CACHE SAVED] "
-            f"{cache_path}"
-        )
+        print(f"[CACHE SAVED] " f"{cache_path}")
 
-        print(
-            f"[TOTAL SAMPLES] "
-            f"{len(self.samples)}"
-        )
+        print(f"[TOTAL SAMPLES] " f"{len(self.samples)}")
 
-        print(
-            f"[BUILD TIME] "
-            f"{elapsed:.2f} min"
-        )
+        print(f"[BUILD TIME] " f"{elapsed:.2f} min")
 
     def __len__(self):
 
@@ -256,15 +187,9 @@ class QAIRDataset(Dataset):
 
 def collate_fn(batch):
 
-    max_h = max(
-        x["H"].shape[0]
-        for x in batch
-    )
+    max_h = max(x["H"].shape[0] for x in batch)
 
-    max_o = max(
-        x["O"].shape[0]
-        for x in batch
-    )
+    max_o = max(x["O"].shape[0] for x in batch)
 
     dim = batch[0]["H"].shape[-1]
 
@@ -283,15 +208,9 @@ def collate_fn(batch):
 
         if H.shape[0] < max_h:
 
-            pad = torch.zeros(
-                max_h - H.shape[0],
-                dim
-            )
+            pad = torch.zeros(max_h - H.shape[0], dim)
 
-            H = torch.cat(
-                [H, pad],
-                dim=0
-            )
+            H = torch.cat([H, pad], dim=0)
 
         # ----------------------------------
         # PAD OPTIONS
@@ -299,31 +218,17 @@ def collate_fn(batch):
 
         if O.shape[0] < max_o:
 
-            pad = torch.zeros(
-                max_o - O.shape[0],
-                dim
-            )
+            pad = torch.zeros(max_o - O.shape[0], dim)
 
-            O = torch.cat(
-                [O, pad],
-                dim=0
-            )
+            O = torch.cat([O, pad], dim=0)
 
         Hs.append(H)
         Os.append(O)
 
-        ys.append(
-            sample["y"]
-        )
+        ys.append(sample["y"])
 
     return {
-
         "H": torch.stack(Hs),
-
         "O": torch.stack(Os),
-
-        "y": torch.tensor(
-            ys,
-            dtype=torch.long
-        )
+        "y": torch.tensor(ys, dtype=torch.long),
     }

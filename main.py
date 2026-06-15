@@ -9,13 +9,7 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "--mode",
-        type=str,
-        default="train",
-        choices=[
-            "train",
-            "ablation"
-        ]
+        "--mode", type=str, default="train", choices=["train", "ablation"]
     )
 
     args = parser.parse_args()

@@ -75,9 +75,21 @@ class QAIRvNext(nn.Module):
                 O
             )
 
-            H = H - validator_out[
+            energy = torch.tanh(
+
+            validator_out[
                 "energy"
-            ].unsqueeze(-1)
+            ]
+
+            )
+
+            H = H - (
+
+                0.1 *
+
+                energy.unsqueeze(-1)
+
+            )
 
         collapse_out = self.collapse(H)
 
@@ -93,7 +105,17 @@ class QAIRvNext(nn.Module):
 
         )
 
-        final_scores = scores.mean(
+        collapse_probs = collapse_out[
+            "probabilities"
+        ]
+
+        final_scores = (
+
+            scores *
+
+            collapse_probs.unsqueeze(-1)
+
+        ).sum(
             dim=1
         )
 

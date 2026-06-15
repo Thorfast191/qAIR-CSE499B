@@ -4,38 +4,16 @@ import torch.nn as nn
 
 class PersistentReasoner(nn.Module):
 
-    def __init__(
-
-        self,
-
-        dim,
-
-        steps=3
-
-    ):
+    def __init__(self, dim, steps=3):
 
         super().__init__()
 
         self.steps = steps
 
-        self.attn = nn.MultiheadAttention(
-
-            dim,
-
-            num_heads=4,
-
-            batch_first=True
-
-        )
+        self.attn = nn.MultiheadAttention(dim, num_heads=4, batch_first=True)
 
         self.ffn = nn.Sequential(
-
-            nn.Linear(dim, dim * 2),
-
-            nn.GELU(),
-
-            nn.Linear(dim * 2, dim)
-
+            nn.Linear(dim, dim * 2), nn.GELU(), nn.Linear(dim * 2, dim)
         )
 
         self.norm1 = nn.LayerNorm(dim)
@@ -48,22 +26,12 @@ class PersistentReasoner(nn.Module):
 
         for _ in range(self.steps):
 
-            attn_out, attn = self.attn(
-                H,
-                H,
-                H
-            )
+            attn_out, attn = self.attn(H, H, H)
 
-            H = self.norm1(
-                H + attn_out
-            )
+            H = self.norm1(H + attn_out)
 
-            H = self.norm2(
-                H + self.ffn(H)
-            )
+            H = self.norm2(H + self.ffn(H))
 
-            trajectory.append(
-                H.detach().cpu()
-            )
+            trajectory.append(H.detach().cpu())
 
         return H, trajectory, attn

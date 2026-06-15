@@ -4,11 +4,7 @@ from tqdm.auto import tqdm
 
 
 @torch.no_grad()
-def evaluate(
-    model,
-    loader,
-    device
-):
+def evaluate(model, loader, device):
 
     model.eval()
 
@@ -19,11 +15,7 @@ def evaluate(
     entropies = []
     diversities = []
 
-    for batch in tqdm(
-        loader,
-        desc="Validation",
-        leave=False
-    ):
+    for batch in tqdm(loader, desc="Validation", leave=False):
 
         H = batch["H"].to(device)
         O = batch["O"].to(device)
@@ -31,46 +23,21 @@ def evaluate(
 
         out = model(H, O)
 
-        pred = out["scores"].argmax(
-            dim=1
-        )
+        pred = out["scores"].argmax(dim=1)
 
-        correct += (
-            pred == y
-        ).sum().item()
+        correct += (pred == y).sum().item()
 
         total += y.size(0)
 
-        spreads.append(
-            out["hypothesis_energy"]
-            .var(dim=1)
-            .mean()
-            .item()
-        )
+        spreads.append(out["hypothesis_energy"].var(dim=1).mean().item())
 
-        entropies.append(
-            out["entropy"].item()
-        )
+        entropies.append(out["entropy"].item())
 
-        diversities.append(
-            out["diversity"].item()
-        )
+        diversities.append(out["diversity"].item())
 
     return {
-
-        "acc":
-            correct / total,
-
-        "spread":
-            sum(spreads) /
-            len(spreads),
-
-        "entropy":
-            sum(entropies) /
-            len(entropies),
-
-        "diversity":
-            sum(diversities) /
-            len(diversities)
-
+        "acc": correct / total,
+        "spread": sum(spreads) / len(spreads),
+        "entropy": sum(entropies) / len(entropies),
+        "diversity": sum(diversities) / len(diversities),
     }
