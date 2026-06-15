@@ -49,9 +49,7 @@ class QAIRvNext(nn.Module):
                 dim
             )
 
-        self.collapse = CollapseController(
-            dim
-        )
+        self.collapse = CollapseController()
 
         self.option_proj = nn.Linear(
             dim,
@@ -62,9 +60,11 @@ class QAIRvNext(nn.Module):
 
         H, trajectory, attn = self.reasoner(H)
 
-        if self.use_quantum:
+        quantum_energy = None
 
-            H = H + self.quantum(H)
+        if self.use_quantum:
+            q_state, quantum_energy = self.quantum(H)
+            H = H + q_state
 
         validator_out = None
 
@@ -91,7 +91,20 @@ class QAIRvNext(nn.Module):
 
             )
 
-        collapse_out = self.collapse(H)
+        if validator_out is not None and quantum_energy is not None:
+            collapse_energy = (validator_out["energy"] + quantum_energy) 
+        elif validator_out is not None:
+            collapse_energy = validator_out["energy"]
+        elif quantum_energy is not None:
+            collapse_energy = quantum_energy
+        else:
+                collapse_energy = torch.zeros(
+                H.shape[0],
+                H.shape[1],
+                device=H.device
+            )
+                
+        collapse_out = self.collapse( collapse_energy )
 
         Oproj = self.option_proj(O)
 

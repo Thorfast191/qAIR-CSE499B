@@ -89,7 +89,7 @@ class Trainer:
                     f"best_acc: {e}"
                 )
 
-        history = {"loss": [], "acc": [], "entropy": [], "diversity": [], "spread": []}
+        history = {"loss": [], "acc": [], "entropy": [], "diversity": [], "spread": [], "collapse_peak": []}
 
         for epoch in range(start_epoch,epochs):
 
@@ -119,6 +119,11 @@ class Trainer:
                         f"max={energy.max().item():.4f} "
                         f"min={energy.min().item():.4f}"
                     )
+                    print(f"[Collapse Peak] "
+                          f"{outputs['collapse_probs'].max(dim=1)[0].mean().item():.4f}")
+                    entropy = -(outputs["collapse_probs"] * torch.log(outputs["collapse_probs"] + 1e-8)).sum(dim=1).mean()
+                    print(f"[Collapse Entropy] "
+                          f"{entropy.item():.4f}")
 
                     printed_energy = True
 
@@ -145,39 +150,30 @@ class Trainer:
             # ============================================
 
             history["loss"].append(avg_loss)
-
             history["acc"].append(metrics["acc"])
-
             history["entropy"].append(metrics["entropy"])
-
             history["diversity"].append(metrics["diversity"])
-
             history["spread"].append(metrics["spread"])
+            history["collapse_peak"].append(metrics["collapse_peak"])
+            
+            
 
             self.save_history(history)
 
             print("\n" + "=" * 60)
-
             print(f"Epoch {epoch+1}/{epochs}")
-
             print(f"Train Loss : " f"{avg_loss:.4f}")
-
             print(f"Val Acc    : " f"{metrics['acc']:.4f}")
-
             print(f"Entropy    : " f"{metrics['entropy']:.4f}")
-
             print(f"Diversity  : " f"{metrics['diversity']:.4f}")
-
             print(f"Spread     : " f"{metrics['spread']:.4f}")
+            print(f"Collapse Peak : " f"{metrics['collapse_peak']:.4f}")
 
             self.save_checkpoint(epoch, best_acc, best=False)
 
             if metrics["acc"] > best_acc:
-
                 best_acc = metrics["acc"]
-
                 self.save_checkpoint(epoch, best_acc, best=True)
-
                 print(f"[BEST] " f"{best_acc:.4f}")
 
         print("\nTraining Complete.")

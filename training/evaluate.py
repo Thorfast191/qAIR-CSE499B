@@ -14,6 +14,7 @@ def evaluate(model, loader, device):
     spreads = []
     entropies = []
     diversities = []
+    collapse_peaks = []
 
     for batch in tqdm(loader, desc="Validation", leave=False):
 
@@ -35,9 +36,14 @@ def evaluate(model, loader, device):
 
         diversities.append(out["diversity"].item())
 
+        collapse_peak = (out["collapse_probs"].max(dim=1)[0].mean().item())
+
+        collapse_peaks.append(collapse_peak)
+
     return {
         "acc": correct / total,
         "spread": sum(spreads) / len(spreads),
         "entropy": sum(entropies) / len(entropies),
         "diversity": sum(diversities) / len(diversities),
+        "collapse_peak": sum(collapse_peaks) / len(collapse_peaks),
     }

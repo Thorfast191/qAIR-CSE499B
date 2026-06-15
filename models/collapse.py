@@ -1,32 +1,56 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class CollapseController(nn.Module):
 
-    def __init__(self, dim):
+    def __init__(self):
 
         super().__init__()
 
-        self.energy_head = nn.Linear(dim, 1)
+    def forward(self, energy):
 
-    def forward(self, H):
+        amplitude = torch.exp(
+            -0.5 * energy
+        )
 
-        energy = self.energy_head(H).squeeze(-1)
+        amplitude = amplitude / (
+            torch.norm(
+                amplitude,
+                dim=1,
+                keepdim=True
+            ) + 1e-8
+        )
 
-        probs = F.softmax(-energy, dim=1)
+        probs = amplitude.pow(2)
 
-        entropy = -(probs * torch.log(probs + 1e-8)).sum(dim=1).mean()
+        entropy = -(
+            probs *
+            torch.log(
+                probs + 1e-8
+            )
+        ).sum(dim=1).mean()
 
-        diversity = energy.var(dim=1).mean()
+        diversity = energy.var(
+            dim=1
+        ).mean()
 
-        collapse_loss = 0.1 * entropy + 0.01 * diversity
+        collapse_loss = (
+            0.1 * entropy
+            + 0.01 * diversity
+        )
 
         return {
+
             "energy": energy,
+
+            "amplitude": amplitude,
+
             "probabilities": probs,
+
             "entropy": entropy,
+
             "diversity": diversity,
+
             "collapse_loss": collapse_loss,
         }
