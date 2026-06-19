@@ -4,22 +4,26 @@ import torch
 
 def plot_energy_map(energies, save_path=None):
 
-    energies = torch.tensor(energies).cpu().numpy()
+    if isinstance(energies, torch.Tensor):
+        energies = energies.detach().cpu().numpy()
 
-    plt.figure(figsize=(8, 4))
+    plt.figure(figsize=(6,5))
 
-    plt.imshow(energies, aspect="auto")
+    plt.imshow(
+        energies,
+        aspect="auto",
+        interpolation="nearest",
+    )
 
-    plt.colorbar(label="Energy")
+    plt.colorbar(label="Hamiltonian Energy")
 
-    plt.xlabel("Hypothesis")
+    plt.xlabel("Answer")
 
-    plt.ylabel("Reasoning Step")
+    plt.ylabel("Hypothesis")
 
-    plt.title("Hypothesis Energy Evolution")
+    plt.title("Hypothesis ↔ Answer Energy")
 
     if save_path:
-
-        plt.savefig(save_path, bbox_inches="tight")
+        plt.savefig(save_path, dpi=200, bbox_inches="tight")
 
     plt.show()
