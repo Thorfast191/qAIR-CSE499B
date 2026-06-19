@@ -148,7 +148,7 @@ class PersistentReasoner(nn.Module):
 
             if potential is not None:
 
-                field = field + potential.unsqueeze(-1)
+                field = field + potential
 
             # -----------------------------------------
             # Adaptive evolution gate

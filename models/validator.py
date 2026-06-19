@@ -44,11 +44,11 @@ class HypothesisValidator(nn.Module):
         # Feature-wise Hamiltonian potential
         self.potential_net = nn.Sequential(
 
-            nn.Linear(dim * 4, dim),
+            nn.Linear(dim * 4, dim * 2),
 
             nn.GELU(),
 
-            nn.Linear(dim, 1),
+            nn.Linear(dim * 2, dim),
 
         )
 
