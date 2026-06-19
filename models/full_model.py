@@ -37,13 +37,13 @@ class QAIRvNext(nn.Module):
     def forward(self, H, O):
 
         validator_out = None
+        potential = None
 
         if self.use_validator:
             validator_out = self.validator(H, O)
+            potential = validator_out["potential"]
 
-            quality = torch.tanh(validator_out["energy"])
-            H = H + (0.1 * quality.unsqueeze(-1))
-        H, trajectory, attn = self.reasoner(H)
+        H, trajectory, attn = self.reasoner(H, potential)
 
         quantum_energy = None
 
@@ -69,7 +69,8 @@ class QAIRvNext(nn.Module):
 
         return {
             "scores": final_scores,
-            "hypothesis_energy": collapse_out["energy"],
+            "quantum_energy": collapse_out["energy"],
+            "validator_potential": potential,
             "collapse_loss": collapse_out["collapse_loss"],
             "collapse_probs": collapse_out["probabilities"],
             "entropy": collapse_out["entropy"],

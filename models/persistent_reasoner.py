@@ -22,7 +22,7 @@ class PersistentReasoner(nn.Module):
 
         self.dt = nn.Parameter(torch.tensor(0.1))
 
-    def forward(self, H):
+    def forward(self, H, potential=None):
 
         trajectory = []
 
@@ -39,6 +39,9 @@ class PersistentReasoner(nn.Module):
             field = torch.einsum("bkj,bjd->bkd", interaction, H)
 
             field = self.hamiltonian(field)
+
+            if potential is not None:
+                field = field + potential.unsqueeze(-1)
 
             # quantum-style evolution
 

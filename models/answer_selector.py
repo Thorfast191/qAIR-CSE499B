@@ -8,19 +8,37 @@ class EnergyAnswerSelector(nn.Module):
 
         super().__init__()
 
-        self.net = nn.Sequential(nn.Linear(dim * 2, dim), nn.GELU(), nn.Linear(dim, 1))
+        # Learnable Hamiltonian operator
+        self.hamiltonian = nn.Linear(
+            dim,
+            dim,
+            bias=False
+        )
 
     def forward(self, H, O):
 
-        B, K, D = H.shape
-        _, N, _ = O.shape
+        """
+        H : (B, K, D)
+            K hypothesis states
 
-        H_exp = H.unsqueeze(2).expand(B, K, N, D)
+        O : (B, N, D)
+            N answer option states
 
-        O_exp = O.unsqueeze(1).expand(B, K, N, D)
+        Returns
+        -------
+        energy : (B, K, N)
 
-        x = torch.cat([H_exp, O_exp], dim=-1)
+        Lower energy => better answer
+        """
 
-        energy = self.net(x).squeeze(-1)
+        # Apply Hamiltonian to answer states
+        O_proj = self.hamiltonian(O)
+
+        # Hamiltonian expectation
+        energy = -torch.einsum(
+            "bkd,bnd->bkn",
+            H,
+            O_proj
+        )
 
         return energy

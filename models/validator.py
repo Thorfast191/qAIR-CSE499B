@@ -30,12 +30,12 @@ class HypothesisValidator(nn.Module):
         specificity = scores[..., 2]
         relevance = scores[..., 3]
 
-        energy = -(0.4 * causal + 0.2 * diversity + 0.2 * specificity + 0.2 * relevance)
+        potential = -(0.4 * causal + 0.2 * diversity + 0.2 * specificity + 0.2 * relevance)
 
-        energy = energy.mean(dim=2)
+        potential = potential.mean(dim=2)
 
         return {
-            "energy": energy,
+            "potential": potential,
             "causal": causal.mean(dim=2),
             "diversity": diversity.mean(dim=2),
             "specificity": specificity.mean(dim=2),
