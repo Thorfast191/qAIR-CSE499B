@@ -83,6 +83,14 @@ class PersistentReasoner(nn.Module):
 
     def forward(self, H, potential=None):
 
+        print("=" * 60)
+
+        print("INPUT H:", H.shape)
+
+        if potential is not None:
+
+            print("INPUT potential:", potential.shape)
+
         trajectory = []
 
         interaction = None
