@@ -91,7 +91,6 @@ def run_training(
         ckpt = torch.load(
             latest_ckpt,
             map_location=device,
-            best_acc=best_acc,
         )
 
         model.load_state_dict(ckpt["model"])
