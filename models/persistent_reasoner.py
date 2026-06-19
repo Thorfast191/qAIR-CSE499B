@@ -145,10 +145,16 @@ class PersistentReasoner(nn.Module):
             # -----------------------------------------
             # Validator potential
             # -----------------------------------------
+            print("=" * 50)
+            print("H           :", H.shape)
+            print("H_norm      :", H_norm.shape)
+            print("interaction :", interaction.shape)
+            print("field       :", field.shape)
 
             if potential is not None:
+                print("potential   :", potential.shape)
 
-                field = field + potential
+            field = field + potential if potential is not None else field
 
             # -----------------------------------------
             # Adaptive evolution gate
