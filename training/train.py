@@ -2,6 +2,7 @@ import os
 import torch
 
 from tqdm.auto import tqdm
+from torch.amp import autocast, GradScaler
 
 from training.losses import compute_loss
 from training.evaluate import evaluate
@@ -23,7 +24,11 @@ class Trainer:
 
         os.makedirs(ckpt_dir, exist_ok=True)
 
-        self.optim = torch.optim.AdamW(model.parameters(), lr=1e-4)
+        self.optim = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-2, betas=(0.9, 0.98))
+
+        self.scaler = GradScaler("cuda",enabled=(device == "cuda"))
+
+        self.scheduler = None
 
     # =====================================================
     # SAVE CHECKPOINT
@@ -40,7 +45,13 @@ class Trainer:
                 "epoch": epoch,
                 "best_acc": best_acc,
                 "model": self.model.state_dict(),
-                "optimizer": self.optim.state_dict(),
+                "optimizer":self.optim.state_dict(),
+                "scheduler": (
+                        self.scheduler.state_dict()
+                        if self.scheduler is not None
+                        else None
+                    ),
+                "scaler": self.scaler.state_dict(),
             },
             path,
         )
@@ -57,26 +68,11 @@ class Trainer:
     # TRAIN
     # =====================================================
 
-    def train(self, epochs=5, start_epoch=0):
+    def train(self, epochs=5, start_epoch=0, best_acc=0.0):
 
-        best_acc = 0.0
+        if self.scheduler is None:
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=epochs, eta_min=1e-6)
 
-        best_path = os.path.join(self.ckpt_dir, f"{self.name}_best.pt")
-
-        if os.path.exists(best_path):
-
-            try:
-
-                best_ckpt = torch.load(best_path, map_location="cpu")
-
-                if "best_acc" in best_ckpt:
-
-                    best_acc = best_ckpt["best_acc"]
-
-                    print(f"[BEST ACC RESTORED] " f"{best_acc:.4f}")
-
-            except Exception as e:
-                print(f"[WARNING] Could not load " f"best_acc: {e}")
 
         history = {
             "loss": [],
@@ -104,13 +100,17 @@ class Trainer:
 
                 y = batch["y"].to(self.device)
 
-                outputs = self.model(H, O)
-                if outputs["validator"] is not None and not printed_energy:
+                self.optim.zero_grad(set_to_none=True)
+                with autocast( device_type="cuda", enabled=(self.device == "cuda")):
+                        outputs = self.model(H, O)
+                        loss = compute_loss(outputs, y)
 
-                    energy = outputs["validator"]["energy"]
+                if outputs.get("validator") is not None and not printed_energy:
+
+                    energy = outputs["validator_potential"]
 
                     print(
-                        f"\n[Validator Energy] "
+                        f"\n[validator_potential] "
                         f"mean={energy.mean().item():.4f} "
                         f"max={energy.max().item():.4f} "
                         f"min={energy.min().item():.4f}"
@@ -131,15 +131,18 @@ class Trainer:
 
                     printed_energy = True
 
-                loss = compute_loss(outputs, y)
+                self.scaler.scale(loss).backward()
 
-                self.optim.zero_grad()
+                self.scaler.unscale_(self.optim)
 
-                loss.backward()
+                torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        2.0,
+                    )
 
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                self.scaler.step(self.optim)
 
-                self.optim.step()
+                self.scaler.update()
 
                 total_loss += loss.item()
 
@@ -148,6 +151,9 @@ class Trainer:
             avg_loss = total_loss / len(self.train_loader)
 
             metrics = evaluate(self.model, self.val_loader, self.device)
+
+            self.scheduler.step()
+            print(f"LR: {self.scheduler.get_last_lr()[0]:.6f}")
 
             # ============================================
             # HISTORY
@@ -171,11 +177,11 @@ class Trainer:
             print(f"Spread     : " f"{metrics['spread']:.4f}")
             print(f"Collapse Peak : " f"{metrics['collapse_peak']:.4f}")
 
-            self.save_checkpoint(epoch, best_acc, best=False)
-
             if metrics["acc"] > best_acc:
                 best_acc = metrics["acc"]
                 self.save_checkpoint(epoch, best_acc, best=True)
                 print(f"[BEST] " f"{best_acc:.4f}")
+
+            self.save_checkpoint(epoch, best_acc, best=False)
 
         print("\nTraining Complete.")

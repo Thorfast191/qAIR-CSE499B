@@ -119,6 +119,44 @@ def run_ablation_suite(
 
             trainer.optim.load_state_dict(ckpt["optimizer"])
 
+            # -------------------------
+
+            # Restore scheduler
+
+            # -------------------------
+
+            trainer.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+
+                trainer.optim,
+
+                T_max=epochs,
+
+                eta_min=1e-6,
+
+            )
+
+            if ckpt.get("scheduler") is not None:
+
+                trainer.scheduler.load_state_dict(
+
+                    ckpt["scheduler"]
+
+                )
+
+            # -------------------------
+
+            # Restore AMP GradScaler
+
+            # -------------------------
+
+            if ckpt.get("scaler") is not None:
+
+                trainer.scaler.load_state_dict(
+
+                    ckpt["scaler"]
+
+                )
+
             start_epoch = ckpt["epoch"] + 1
 
             print(f"Resuming from epoch " f"{start_epoch}")

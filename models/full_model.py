@@ -10,72 +10,158 @@ from models.answer_selector import EnergyAnswerSelector
 
 class QAIRvNext(nn.Module):
 
-    def __init__(self, dim, use_quantum=True, use_validator=True, persistent_steps=3):
+    def __init__(
+        self,
+        dim,
+        use_quantum=True,
+        use_validator=True,
+        persistent_steps=3,
+    ):
 
         super().__init__()
 
         self.use_quantum = use_quantum
-
         self.use_validator = use_validator
 
-        self.reasoner = PersistentReasoner(dim, steps=persistent_steps)
+        self.reasoner = PersistentReasoner(
+            dim,
+            steps=persistent_steps,
+        )
 
         if use_quantum:
-
             self.quantum = QuantumEvolutionLayer(dim)
 
         if use_validator:
-
             self.validator = HypothesisValidator(dim)
 
-        self.collapse = CollapseController()
+        self.selector = EnergyAnswerSelector(dim)
 
-        self.selector = EnergyAnswerSelector(
-            dim,
-        )
+        self.collapse = CollapseController()
 
     def forward(self, H, O):
 
         validator_out = None
         potential = None
 
+        # ---------------------------------------------------
+        # Validator
+        # ---------------------------------------------------
+
         if self.use_validator:
+
             validator_out = self.validator(H, O)
+
             potential = validator_out["potential"]
 
-        H, trajectory, attn = self.reasoner(H, potential)
+        # ---------------------------------------------------
+        # Persistent reasoning
+        # ---------------------------------------------------
+
+        H, trajectory, attn = self.reasoner(
+            H,
+            potential,
+        )
+
+        # ---------------------------------------------------
+        # Quantum evolution
+        # ---------------------------------------------------
 
         quantum_energy = None
 
         if self.use_quantum:
+
             q_state, quantum_energy = self.quantum(H)
+
             H = H + q_state
+
+        # ---------------------------------------------------
+        # Answer Hamiltonian
+        # ---------------------------------------------------
+
+        answer_energy = self.selector(
+            H,
+            O,
+        )                       # (B,K,N)
+
+        # ---------------------------------------------------
+        # Collapse Energy
+        #
+        # Lower energy = better hypothesis
+        # ---------------------------------------------------
+
+        selector_energy = answer_energy.mean(
+            dim=-1
+        )                       # (B,K)
 
         if quantum_energy is not None:
 
-            collapse_energy = quantum_energy
+            collapse_energy = (
+                selector_energy
+                + quantum_energy
+            )
+
         else:
-            collapse_energy = torch.zeros(H.shape[0], H.shape[1], device=H.device)
 
-        collapse_out = self.collapse(collapse_energy)
+            collapse_energy = selector_energy
 
-        scores = self.selector(H, O)
+        collapse_out = self.collapse(
+            collapse_energy
+        )
 
-        collapse_probs = collapse_out["probabilities"]
+        collapse_probs = collapse_out[
+            "probabilities"
+        ]                       # (B,K)
 
-        final_energy = (scores * collapse_probs.unsqueeze(-1)).sum(dim=1)
+        # ---------------------------------------------------
+        # Final Answer Energy
+        # ---------------------------------------------------
+
+        final_energy = (
+            answer_energy
+            * collapse_probs.unsqueeze(-1)
+        ).sum(
+            dim=1
+        )                       # (B,N)
 
         final_scores = -final_energy
 
         return {
+
             "scores": final_scores,
-            "quantum_energy": collapse_out["energy"],
+
+            "answer_energy": answer_energy,
+
+            "collapse_energy": collapse_energy,
+
+            "quantum_energy": quantum_energy,
+
+            "collapse_probs": collapse_probs,
+
+            "collapse_loss": collapse_out[
+                "collapse_loss"
+            ],
+
+            "entropy": collapse_out[
+                "entropy"
+            ],
+
+            "diversity": collapse_out[
+                "diversity"
+            ],
+
+            "spread": collapse_out[
+                "spread"
+            ],
+
+            "peak": collapse_out[
+                "peak"
+            ],
+
             "validator_potential": potential,
-            "collapse_loss": collapse_out["collapse_loss"],
-            "collapse_probs": collapse_out["probabilities"],
-            "entropy": collapse_out["entropy"],
-            "diversity": collapse_out["diversity"],
+
             "trajectory": trajectory,
+
             "attention": attn,
+
             "validator": validator_out,
         }

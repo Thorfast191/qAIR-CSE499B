@@ -79,11 +79,44 @@ def run_training(
     )
 
     start_epoch = 0
+    best_acc = 0.0
     print("\nCheckpoint Search:")
     print(latest_ckpt)
     print("Exists:", os.path.exists(latest_ckpt))
 
     if os.path.exists(latest_ckpt):
+
+        print("\n[RESUME] Loading checkpoint:")
+
+        ckpt = torch.load(
+            latest_ckpt,
+            map_location=device,
+            best_acc=best_acc,
+        )
+
+        model.load_state_dict(ckpt["model"])
+        trainer.optim.load_state_dict(ckpt["optimizer"])
+
+        # Restore scheduler
+        trainer.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            trainer.optim,
+            T_max=epochs,
+            eta_min=1e-6,
+        )
+
+        if ckpt.get("scheduler") is not None:
+            trainer.scheduler.load_state_dict(ckpt["scheduler"])
+
+        # Restore GradScaler
+        if ckpt.get("scaler") is not None:
+            trainer.scaler.load_state_dict(ckpt["scaler"])
+
+        # Restore best accuracy
+        best_acc = ckpt.get("best_acc", 0.0)
+
+        start_epoch = ckpt["epoch"] + 1
+
+        print(f"Resuming from epoch {start_epoch}")    
 
         print("\n[RESUME] Loading checkpoint:")
         print(latest_ckpt)
@@ -104,4 +137,5 @@ def run_training(
     trainer.train(
         epochs=epochs,
         start_epoch=start_epoch,
+        best_acc=best_acc,
     )
