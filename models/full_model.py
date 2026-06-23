@@ -40,7 +40,7 @@ class QAIRvNext(nn.Module):
 
     def forward(self, H, O, y=None):
 
-        validator_out = self.validator(H, O, y)
+        validator_out = None
         potential = None
 
         # ---------------------------------------------------
@@ -49,7 +49,7 @@ class QAIRvNext(nn.Module):
 
         if self.use_validator:
 
-            validator_out = self.validator(H, O)
+            validator_out = self.validator(H, O, y)
 
             potential = validator_out["potential"]
 

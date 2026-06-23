@@ -107,12 +107,15 @@ class HypothesisValidator(nn.Module):
 
         relevance = scores[..., 3]
 
-        relevance_target = None
+        target = None
 
         if y is not None:
-            correct_score = relevance[torch.arrange(B), :, y]
-
-            target = torch.one_like(correct_score)
+            target = torch.zeros_like(relevance)
+            target[
+                torch.arange(B, device=H.device), 
+                :, 
+                y,
+            ] = 1.0
         # -----------------------------------------
         # Feature-wise potential
         # -----------------------------------------
@@ -168,6 +171,8 @@ class HypothesisValidator(nn.Module):
             "specificity": specificity.mean(dim=2),
 
             "relevance": relevance.mean(dim=2),
+            
+            "relevance_logits": relevance,
 
             "relevance_target": target,
 

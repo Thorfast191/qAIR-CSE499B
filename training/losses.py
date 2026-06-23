@@ -75,7 +75,7 @@ def compute_loss(outputs, labels):
 
         validator_loss = F.binary_cross_entropy_with_logits(
 
-            validator["relevance"],
+            validator["relevance_logits"],
 
             validator["relevance_target"],
 
