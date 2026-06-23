@@ -57,16 +57,6 @@ class QAIRvNext(nn.Module):
         # Persistent reasoning
         # ---------------------------------------------------
 
-        print("=" * 50)
-
-        print("Input H:", H.shape)
-
-        print("Input O:", O.shape)
-
-        if potential is not None:
-
-            print("Potential:", potential.shape)
-
         H, trajectory, attn = self.reasoner(
             H,
             potential,

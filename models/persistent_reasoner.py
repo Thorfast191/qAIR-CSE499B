@@ -83,14 +83,6 @@ class PersistentReasoner(nn.Module):
 
     def forward(self, H, potential=None):
 
-        print("=" * 60)
-
-        print("INPUT H:", H.shape)
-
-        if potential is not None:
-
-            print("INPUT potential:", potential.shape)
-
         trajectory = []
 
         interaction = None
@@ -153,14 +145,6 @@ class PersistentReasoner(nn.Module):
             # -----------------------------------------
             # Validator potential
             # -----------------------------------------
-            print("=" * 50)
-            print("H           :", H.shape)
-            print("H_norm      :", H_norm.shape)
-            print("interaction :", interaction.shape)
-            print("field       :", field.shape)
-
-            if potential is not None:
-                print("potential   :", potential.shape)
 
             field = field + potential if potential is not None else field
 

@@ -34,6 +34,12 @@ class CollapseController(nn.Module):
     def forward(self, energy):
 
         # ---------------------------------------------
+        # Save raw energy for metrics
+        # ---------------------------------------------
+
+        raw_energy = energy.clone()
+
+        # ---------------------------------------------
         # Normalize energy (stable optimization)
         # ---------------------------------------------
 
@@ -64,7 +70,10 @@ class CollapseController(nn.Module):
             ) + 1e-8
         )
 
+        # ---------------------------------------------
         # Born Rule
+        # ---------------------------------------------
+
         probabilities = amplitude.pow(2)
 
         probabilities = probabilities / (
@@ -79,20 +88,19 @@ class CollapseController(nn.Module):
         # ---------------------------------------------
 
         entropy = -(
-            probabilities *
-            torch.log(
-                probabilities + 1e-8
-            )
+            probabilities
+            * torch.log(probabilities + 1e-8)
         ).sum(dim=1).mean()
 
-        diversity = energy.var(
+        # Compute metrics BEFORE normalization
+
+        diversity = raw_energy.var(
             dim=1
         ).mean()
 
         spread = (
-            energy.max(dim=1).values
-            -
-            energy.min(dim=1).values
+            raw_energy.max(dim=1).values
+            - raw_energy.min(dim=1).values
         ).mean()
 
         peak = probabilities.max(
@@ -112,6 +120,8 @@ class CollapseController(nn.Module):
         return {
 
             "energy": energy,
+
+            "raw_energy": raw_energy,
 
             "amplitude": amplitude,
 

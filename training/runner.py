@@ -117,21 +117,6 @@ def run_training(
 
         print(f"Resuming from epoch {start_epoch}")    
 
-        print("\n[RESUME] Loading checkpoint:")
-        print(latest_ckpt)
-
-        ckpt = torch.load(
-            latest_ckpt,
-            map_location=device,
-        )
-
-        model.load_state_dict(ckpt["model"])
-
-        trainer.optim.load_state_dict(ckpt["optimizer"])
-
-        start_epoch = ckpt["epoch"] + 1
-        print(f"Resuming from epoch {start_epoch}")
-
     print(f"\nTraining from epoch " f"{start_epoch} to {epochs}")
     trainer.train(
         epochs=epochs,
