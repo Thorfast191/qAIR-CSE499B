@@ -222,9 +222,9 @@ def collate_fn(batch):
         if H.shape[0] < max_h:
 
             pad = H.mean(
-                            dim=0,
-                            keepdim=True,
-                        ).repeat(max_h - H.shape[0], 1)
+                dim=0,
+                keepdim=True,
+            ).repeat(max_h - H.shape[0], 1)
 
             H = torch.cat([H, pad], dim=0)
 
@@ -235,9 +235,9 @@ def collate_fn(batch):
         if O.shape[0] < max_o:
 
             pad = O.mean(
-                            dim=0,
-                            keepdim=True,
-                        ).repeat(max_o - O.shape[0], 1)
+                dim=0,
+                keepdim=True,
+            ).repeat(max_o - O.shape[0], 1)
 
             O = torch.cat([O, pad], dim=0)
 
@@ -258,4 +258,3 @@ def collate_fn(batch):
             dtype=torch.long,
         ),
     }
-    

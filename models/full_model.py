@@ -81,7 +81,7 @@ class QAIRvNext(nn.Module):
         answer_energy = self.selector(
             H,
             O,
-        )                       # (B,K,N)
+        )  # (B,K,N)
 
         # ---------------------------------------------------
         # Collapse Energy
@@ -89,79 +89,43 @@ class QAIRvNext(nn.Module):
         # Lower energy = better hypothesis
         # ---------------------------------------------------
 
-        selector_energy = answer_energy.mean(
-            dim=-1
-        )                       # (B,K)
+        selector_energy = answer_energy.mean(dim=-1)  # (B,K)
 
         if quantum_energy is not None:
 
-            collapse_energy = (
-                selector_energy
-                + quantum_energy
-            )
+            collapse_energy = selector_energy + quantum_energy
 
         else:
 
             collapse_energy = selector_energy
 
-        collapse_out = self.collapse(
-            collapse_energy
-        )
+        collapse_out = self.collapse(collapse_energy)
 
-        collapse_probs = collapse_out[
-            "probabilities"
-        ]                       # (B,K)
+        collapse_probs = collapse_out["probabilities"]  # (B,K)
 
         # ---------------------------------------------------
         # Final Answer Energy
         # ---------------------------------------------------
 
-        final_energy = (
-            answer_energy
-            * collapse_probs.unsqueeze(-1)
-        ).sum(
+        final_energy = (answer_energy * collapse_probs.unsqueeze(-1)).sum(
             dim=1
-        )                       # (B,N)
+        )  # (B,N)
 
         final_scores = -final_energy
 
         return {
-
             "scores": final_scores,
-
             "answer_energy": answer_energy,
-
             "collapse_energy": collapse_energy,
-
             "quantum_energy": quantum_energy,
-
             "collapse_probs": collapse_probs,
-
-            "collapse_loss": collapse_out[
-                "collapse_loss"
-            ],
-
-            "entropy": collapse_out[
-                "entropy"
-            ],
-
-            "diversity": collapse_out[
-                "diversity"
-            ],
-
-            "spread": collapse_out[
-                "spread"
-            ],
-
-            "peak": collapse_out[
-                "peak"
-            ],
-
+            "collapse_loss": collapse_out["collapse_loss"],
+            "entropy": collapse_out["entropy"],
+            "diversity": collapse_out["diversity"],
+            "spread": collapse_out["spread"],
+            "peak": collapse_out["peak"],
             "validator_potential": potential,
-
             "trajectory": trajectory,
-
             "attention": attn,
-
             "validator": validator_out,
         }

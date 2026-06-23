@@ -126,22 +126,14 @@ def run_ablation_suite(
             # -------------------------
 
             trainer.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-
                 trainer.optim,
-
                 T_max=epochs,
-
                 eta_min=1e-6,
-
             )
 
             if ckpt.get("scheduler") is not None:
 
-                trainer.scheduler.load_state_dict(
-
-                    ckpt["scheduler"]
-
-                )
+                trainer.scheduler.load_state_dict(ckpt["scheduler"])
 
             # -------------------------
 
@@ -151,11 +143,7 @@ def run_ablation_suite(
 
             if ckpt.get("scaler") is not None:
 
-                trainer.scaler.load_state_dict(
-
-                    ckpt["scaler"]
-
-                )
+                trainer.scaler.load_state_dict(ckpt["scaler"])
 
             start_epoch = ckpt["epoch"] + 1
 

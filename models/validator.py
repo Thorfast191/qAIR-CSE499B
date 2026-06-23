@@ -4,7 +4,6 @@ import torch.nn.functional as F
 
 
 class HypothesisValidator(nn.Module):
-
     """
     Multi-objective Hypothesis Validator
 
@@ -24,32 +23,20 @@ class HypothesisValidator(nn.Module):
         super().__init__()
 
         self.score_net = nn.Sequential(
-
             nn.Linear(dim * 4, dim * 2),
-
             nn.GELU(),
-
             nn.LayerNorm(dim * 2),
-
             nn.Dropout(0.10),
-
             nn.Linear(dim * 2, dim),
-
             nn.GELU(),
-
             nn.Linear(dim, 4),
-
         )
 
         # Feature-wise Hamiltonian potential
         self.potential_net = nn.Sequential(
-
             nn.Linear(dim * 4, dim * 2),
-
             nn.GELU(),
-
             nn.Linear(dim * 2, dim),
-
         )
 
     def forward(self, H, O, y=None):
@@ -95,9 +82,7 @@ class HypothesisValidator(nn.Module):
         # Validation scores
         # -----------------------------------------
 
-        scores = self.score_net(
-            features
-        )
+        scores = self.score_net(features)
 
         causal = scores[..., 0]
 
@@ -112,22 +97,19 @@ class HypothesisValidator(nn.Module):
         if y is not None:
             target = torch.zeros_like(relevance)
             target[
-                torch.arange(B, device=H.device), 
-                :, 
+                torch.arange(B, device=H.device),
+                :,
                 y,
             ] = 1.0
         # -----------------------------------------
         # Feature-wise potential
         # -----------------------------------------
 
-        potential = self.potential_net(
-            features
-        )
+        potential = self.potential_net(features)
 
         # Weight by reasoning quality
 
         weights = torch.softmax(
-
             torch.stack(
                 [
                     causal,
@@ -137,21 +119,14 @@ class HypothesisValidator(nn.Module):
                 ],
                 dim=-1,
             ),
-
             dim=-1,
-
         )
 
         quality = (
-
             0.40 * weights[..., 0]
-
             + 0.20 * weights[..., 1]
-
             + 0.20 * weights[..., 2]
-
             + 0.20 * weights[..., 3]
-
         )
 
         potential = potential * quality.unsqueeze(-1)
@@ -161,19 +136,11 @@ class HypothesisValidator(nn.Module):
         potential = potential.mean(dim=2)
 
         return {
-
             "potential": potential,
-
             "causal": causal.mean(dim=2),
-
             "diversity": diversity.mean(dim=2),
-
             "specificity": specificity.mean(dim=2),
-
             "relevance": relevance.mean(dim=2),
-            
             "relevance_logits": relevance,
-
             "relevance_target": target,
-
         }

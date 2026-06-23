@@ -8,7 +8,6 @@ import torch.nn.functional as F
 
 
 class QuantumEvolutionLayer(nn.Module):
-
     """
     Quantum Hamiltonian Evolution Layer
 
@@ -19,30 +18,17 @@ class QuantumEvolutionLayer(nn.Module):
     - Better energy estimation
     """
 
-    def __init__(self,
-                 dim,
-                 n_qubits=8,
-                 n_layers=3):
+    def __init__(self, dim, n_qubits=8, n_layers=3):
 
         super().__init__()
 
         self.compress = nn.Sequential(
-
-            nn.Linear(dim, dim),
-
-            nn.GELU(),
-
-            nn.Linear(dim, n_qubits)
-
+            nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, n_qubits)
         )
 
-        dev = qml.device(
-            "default.qubit",
-            wires=n_qubits
-        )
+        dev = qml.device("default.qubit", wires=n_qubits)
 
         @qml.qnode(dev, interface="torch")
-
         def circuit(inputs, weights):
 
             # Superposition
@@ -70,17 +56,11 @@ class QuantumEvolutionLayer(nn.Module):
 
             for i in range(n_qubits):
 
-                measurements.append(
-                    qml.expval(qml.PauliX(i))
-                )
+                measurements.append(qml.expval(qml.PauliX(i)))
 
-                measurements.append(
-                    qml.expval(qml.PauliY(i))
-                )
+                measurements.append(qml.expval(qml.PauliY(i)))
 
-                measurements.append(
-                    qml.expval(qml.PauliZ(i))
-                )
+                measurements.append(qml.expval(qml.PauliZ(i)))
 
             return measurements
 
@@ -98,50 +78,37 @@ class QuantumEvolutionLayer(nn.Module):
         )
 
         self.expand = nn.Sequential(
-
             nn.Linear(
                 n_qubits * 3,
                 dim,
             ),
-
             nn.GELU(),
-
             nn.LayerNorm(dim),
-
         )
 
         self.fusion_gate = nn.Sequential(
-
             nn.Linear(
                 dim * 2,
                 dim,
             ),
-
             nn.GELU(),
-
             nn.Linear(
                 dim,
                 dim,
             ),
-
-            nn.Sigmoid()
-
+            nn.Sigmoid(),
         )
 
         self.energy_head = nn.Sequential(
-
             nn.Linear(
                 dim,
                 dim // 2,
             ),
-
             nn.GELU(),
-
             nn.Linear(
                 dim // 2,
                 1,
-            )
-
+            ),
         )
 
     def forward(self, H):
@@ -162,20 +129,13 @@ class QuantumEvolutionLayer(nn.Module):
             )
         )
 
-        z = torch.tanh(
-            z
-        ) * math.pi
+        z = torch.tanh(z) * math.pi
 
-        q = self.quantum(
-            z
-        )
+        q = self.quantum(z)
 
-        q = self.expand(
-            q
-        )
+        q = self.expand(q)
 
         gate = self.fusion_gate(
-
             torch.cat(
                 [
                     H.reshape(
@@ -186,7 +146,6 @@ class QuantumEvolutionLayer(nn.Module):
                 ],
                 dim=-1,
             )
-
         )
 
         q = gate * q + (1.0 - gate) * H.reshape(
@@ -194,9 +153,7 @@ class QuantumEvolutionLayer(nn.Module):
             D,
         )
 
-        energy = self.energy_head(
-            q
-        ).squeeze(-1)
+        energy = self.energy_head(q).squeeze(-1)
 
         q = q.reshape(
             B,

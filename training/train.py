@@ -24,9 +24,11 @@ class Trainer:
 
         os.makedirs(ckpt_dir, exist_ok=True)
 
-        self.optim = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-2, betas=(0.9, 0.98))
+        self.optim = torch.optim.AdamW(
+            model.parameters(), lr=1e-4, weight_decay=1e-2, betas=(0.9, 0.98)
+        )
 
-        self.scaler = GradScaler("cuda",enabled=(device == "cuda"))
+        self.scaler = GradScaler("cuda", enabled=(device == "cuda"))
 
         self.scheduler = None
 
@@ -45,12 +47,10 @@ class Trainer:
                 "epoch": epoch,
                 "best_acc": best_acc,
                 "model": self.model.state_dict(),
-                "optimizer":self.optim.state_dict(),
+                "optimizer": self.optim.state_dict(),
                 "scheduler": (
-                        self.scheduler.state_dict()
-                        if self.scheduler is not None
-                        else None
-                    ),
+                    self.scheduler.state_dict() if self.scheduler is not None else None
+                ),
                 "scaler": self.scaler.state_dict(),
             },
             path,
@@ -71,8 +71,9 @@ class Trainer:
     def train(self, epochs=5, start_epoch=0, best_acc=0.0):
 
         if self.scheduler is None:
-            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=epochs, eta_min=1e-6)
-
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.optim, T_max=epochs, eta_min=1e-6
+            )
 
         history = {
             "loss": [],
@@ -101,9 +102,9 @@ class Trainer:
                 y = batch["y"].to(self.device)
 
                 self.optim.zero_grad(set_to_none=True)
-                with autocast( device_type="cuda", enabled=(self.device == "cuda")):
-                        outputs = self.model(H, O, y)
-                        loss = compute_loss(outputs, y)
+                with autocast(device_type="cuda", enabled=(self.device == "cuda")):
+                    outputs = self.model(H, O, y)
+                    loss = compute_loss(outputs, y)
 
                 if outputs.get("validator") is not None and not printed_energy:
 
@@ -136,9 +137,9 @@ class Trainer:
                 self.scaler.unscale_(self.optim)
 
                 torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        2.0,
-                    )
+                    self.model.parameters(),
+                    2.0,
+                )
 
                 self.scaler.step(self.optim)
 

@@ -6,7 +6,6 @@ import torch.nn.functional as F
 
 
 class PersistentReasoner(nn.Module):
-
     """
     Persistent Hamiltonian Reasoning
 
@@ -41,35 +40,24 @@ class PersistentReasoner(nn.Module):
 
         # Learnable interference
         self.interference = nn.Sequential(
-
             nn.Linear(dim, dim),
-
             nn.GELU(),
-
             nn.Linear(dim, dim),
         )
 
         # Evolution gate
         self.gate = nn.Sequential(
-
             nn.Linear(dim * 2, dim),
-
             nn.GELU(),
-
             nn.Linear(dim, dim),
-
             nn.Sigmoid(),
         )
 
         # Refinement network
         self.ffn = nn.Sequential(
-
             nn.Linear(dim, dim * 4),
-
             nn.GELU(),
-
             nn.Dropout(0.10),
-
             nn.Linear(dim * 4, dim),
         )
 
@@ -77,9 +65,7 @@ class PersistentReasoner(nn.Module):
 
         self.norm2 = nn.LayerNorm(dim)
 
-        self.dt = nn.Parameter(
-            torch.tensor(0.10)
-        )
+        self.dt = nn.Parameter(torch.tensor(0.10))
 
     def forward(self, H, potential=None):
 
@@ -102,9 +88,7 @@ class PersistentReasoner(nn.Module):
             # Hamiltonian metric
             # -----------------------------------------
 
-            H_metric = self.metric(
-                H_norm
-            )
+            H_metric = self.metric(H_norm)
 
             # -----------------------------------------
             # Hypothesis interaction
@@ -116,9 +100,7 @@ class PersistentReasoner(nn.Module):
                 H_norm,
             )
 
-            interaction = interaction / math.sqrt(
-                H.shape[-1]
-            )
+            interaction = interaction / math.sqrt(H.shape[-1])
 
             # -----------------------------------------
             # Hamiltonian field
@@ -130,17 +112,13 @@ class PersistentReasoner(nn.Module):
                 H,
             )
 
-            field = self.hamiltonian(
-                field
-            )
+            field = self.hamiltonian(field)
 
             # -----------------------------------------
             # Learnable interference
             # -----------------------------------------
 
-            field = field + self.interference(
-                field
-            )
+            field = field + self.interference(field)
 
             # -----------------------------------------
             # Validator potential
@@ -153,7 +131,6 @@ class PersistentReasoner(nn.Module):
             # -----------------------------------------
 
             gate = self.gate(
-
                 torch.cat(
                     [
                         H,
@@ -161,40 +138,21 @@ class PersistentReasoner(nn.Module):
                     ],
                     dim=-1,
                 )
-
             )
 
             # -----------------------------------------
             # Persistent evolution
             # -----------------------------------------
 
-            H = self.norm1(
-
-                H
-
-                + gate
-
-                * self.dt
-
-                * field
-
-            )
+            H = self.norm1(H + gate * self.dt * field)
 
             # -----------------------------------------
             # Refinement
             # -----------------------------------------
 
-            H = self.norm2(
+            H = self.norm2(H + self.ffn(H))
 
-                H
-
-                + self.ffn(H)
-
-            )
-
-            trajectory.append(
-                H.detach().cpu()
-            )
+            trajectory.append(H.detach().cpu())
 
         return (
             H,

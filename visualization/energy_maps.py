@@ -7,7 +7,7 @@ def plot_energy_map(energies, save_path=None):
     if isinstance(energies, torch.Tensor):
         energies = energies.detach().cpu().numpy()
 
-    plt.figure(figsize=(6,5))
+    plt.figure(figsize=(6, 5))
 
     plt.imshow(
         energies,

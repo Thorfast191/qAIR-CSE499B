@@ -35,9 +35,7 @@ def evaluate(model, loader, device):
 
         hypothesis_energy = out["answer_energy"].mean(dim=-1)  # (B, K)
 
-        spreads.append(
-            hypothesis_energy.var(dim=1).mean().item()
-        )
+        spreads.append(hypothesis_energy.var(dim=1).mean().item())
 
         # -----------------------------------------
         # Collapse statistics
@@ -47,24 +45,14 @@ def evaluate(model, loader, device):
 
         diversities.append(out["diversity"].item())
 
-        collapse_peak = (
-            out["collapse_probs"]
-            .max(dim=1)[0]
-            .mean()
-            .item()
-        )
+        collapse_peak = out["collapse_probs"].max(dim=1)[0].mean().item()
 
         collapse_peaks.append(collapse_peak)
 
     return {
-
         "acc": correct / total,
-
         "spread": sum(spreads) / len(spreads),
-
         "entropy": sum(entropies) / len(entropies),
-
         "diversity": sum(diversities) / len(diversities),
-
         "collapse_peak": sum(collapse_peaks) / len(collapse_peaks),
     }

@@ -35,26 +35,17 @@ class EnergyAnswerSelector(nn.Module):
 
         # Neural energy function
         self.energy_net = nn.Sequential(
-
             nn.Linear(dim * 4, dim * 2),
-
             nn.GELU(),
-
             nn.LayerNorm(dim * 2),
-
             nn.Dropout(0.10),
-
             nn.Linear(dim * 2, dim),
-
             nn.GELU(),
-
             nn.Linear(dim, 1),
         )
 
         # Learnable positive temperature
-        self.temperature = nn.Parameter(
-            torch.tensor(1.0)
-        )
+        self.temperature = nn.Parameter(torch.tensor(1.0))
 
     def forward(self, H, O):
 
@@ -121,9 +112,7 @@ class EnergyAnswerSelector(nn.Module):
         # Neural Hamiltonian Energy
         # ===================================================
 
-        learned_energy = self.energy_net(
-            features
-        ).squeeze(-1)
+        learned_energy = self.energy_net(features).squeeze(-1)
 
         # ===================================================
         # Hamiltonian Expectation
@@ -149,23 +138,13 @@ class EnergyAnswerSelector(nn.Module):
         # Final Energy
         # ===================================================
 
-        energy = (
-
-            learned_energy
-
-            + 0.5 * hamiltonian_energy
-
-            + 0.5 * cosine_energy
-
-        )
+        energy = learned_energy + 0.5 * hamiltonian_energy + 0.5 * cosine_energy
 
         # ===================================================
         # Positive Temperature
         # ===================================================
 
-        temperature = F.softplus(
-            self.temperature
-        )
+        temperature = F.softplus(self.temperature)
 
         energy = energy * temperature
 

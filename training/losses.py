@@ -25,11 +25,7 @@ def compute_loss(outputs, labels):
 
     if outputs["validator_potential"] is not None:
 
-        potential_loss = (
-            outputs["validator_potential"]
-            .pow(2)
-            .mean()
-        )
+        potential_loss = outputs["validator_potential"].pow(2).mean()
 
     else:
 
@@ -44,11 +40,7 @@ def compute_loss(outputs, labels):
 
     if outputs["quantum_energy"] is not None:
 
-        energy_loss = (
-            outputs["quantum_energy"]
-            .var(dim=1)
-            .mean()
-        )
+        energy_loss = outputs["quantum_energy"].var(dim=1).mean()
 
     else:
 
@@ -68,17 +60,11 @@ def compute_loss(outputs, labels):
 
     validator = outputs.get("validator")
 
-    if (
-        validator is not None
-        and validator.get("relevance_target") is not None
-    ):
+    if validator is not None and validator.get("relevance_target") is not None:
 
         validator_loss = F.binary_cross_entropy_with_logits(
-
             validator["relevance_logits"],
-
             validator["relevance_target"],
-
         )
 
     # ========================================
@@ -86,17 +72,11 @@ def compute_loss(outputs, labels):
     # ========================================
 
     total_loss = (
-
         classification_loss
-
         + 0.10 * collapse_loss
-
         + 0.01 * potential_loss
-
         + 0.01 * energy_loss
-
         + 0.05 * validator_loss
-
     )
 
     return total_loss

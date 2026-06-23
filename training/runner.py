@@ -115,7 +115,7 @@ def run_training(
 
         start_epoch = ckpt["epoch"] + 1
 
-        print(f"Resuming from epoch {start_epoch}")    
+        print(f"Resuming from epoch {start_epoch}")
 
     print(f"\nTraining from epoch " f"{start_epoch} to {epochs}")
     trainer.train(
