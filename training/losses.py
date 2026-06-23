@@ -10,7 +10,7 @@ def compute_loss(outputs, labels):
 
     classification_loss = F.cross_entropy(
         outputs["scores"],
-        labels
+        labels,
     )
 
     # ========================================
@@ -35,7 +35,7 @@ def compute_loss(outputs, labels):
 
         potential_loss = torch.tensor(
             0.0,
-            device=labels.device
+            device=labels.device,
         )
 
     # ========================================
@@ -54,7 +54,31 @@ def compute_loss(outputs, labels):
 
         energy_loss = torch.tensor(
             0.0,
-            device=labels.device
+            device=labels.device,
+        )
+
+    # ========================================
+    # Validator Supervision
+    # ========================================
+
+    validator_loss = torch.tensor(
+        0.0,
+        device=labels.device,
+    )
+
+    validator = outputs.get("validator")
+
+    if (
+        validator is not None
+        and validator.get("relevance_target") is not None
+    ):
+
+        validator_loss = F.binary_cross_entropy_with_logits(
+
+            validator["relevance"],
+
+            validator["relevance_target"],
+
         )
 
     # ========================================
@@ -70,6 +94,8 @@ def compute_loss(outputs, labels):
         + 0.01 * potential_loss
 
         + 0.01 * energy_loss
+
+        + 0.05 * validator_loss
 
     )
 

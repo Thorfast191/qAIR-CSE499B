@@ -38,9 +38,9 @@ class QAIRvNext(nn.Module):
 
         self.collapse = CollapseController()
 
-    def forward(self, H, O):
+    def forward(self, H, O, y=None):
 
-        validator_out = None
+        validator_out = self.validator(H, O, y)
         potential = None
 
         # ---------------------------------------------------

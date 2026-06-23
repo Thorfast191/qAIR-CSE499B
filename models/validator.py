@@ -52,7 +52,7 @@ class HypothesisValidator(nn.Module):
 
         )
 
-    def forward(self, H, O):
+    def forward(self, H, O, y=None):
 
         B, K, D = H.shape
         _, N, _ = O.shape
@@ -107,6 +107,12 @@ class HypothesisValidator(nn.Module):
 
         relevance = scores[..., 3]
 
+        relevance_target = None
+
+        if y is not None:
+            correct_score = relevance[torch.arrange(B), :, y]
+
+            target = torch.one_like(correct_score)
         # -----------------------------------------
         # Feature-wise potential
         # -----------------------------------------
@@ -162,5 +168,7 @@ class HypothesisValidator(nn.Module):
             "specificity": specificity.mean(dim=2),
 
             "relevance": relevance.mean(dim=2),
+
+            "relevance_target": target,
 
         }
