@@ -11,11 +11,12 @@ class QuantumEvolutionLayer(nn.Module):
     """
     Quantum Hamiltonian Evolution Layer
 
-    - Normalized quantum encoding
-    - Learnable compression
-    - Strongly entangled circuit
-    - Residual quantum fusion
-    - Better energy estimation
+    Improvements
+    ------------
+    • Stable quantum encoding
+    • Residual quantum fusion
+    • Learnable quantum correction
+    • Bounded quantum energy
     """
 
     def __init__(self, dim, n_qubits=8, n_layers=3):
@@ -23,34 +24,34 @@ class QuantumEvolutionLayer(nn.Module):
         super().__init__()
 
         self.compress = nn.Sequential(
-            nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, n_qubits)
+            nn.Linear(dim, dim),
+            nn.GELU(),
+            nn.Linear(dim, n_qubits),
         )
 
-        dev = qml.device("default.qubit", wires=n_qubits)
+        dev = qml.device(
+            "default.qubit",
+            wires=n_qubits,
+        )
 
         @qml.qnode(dev, interface="torch")
         def circuit(inputs, weights):
 
             # Superposition
-
             for i in range(n_qubits):
                 qml.Hadamard(wires=i)
 
-            # Encode
-
+            # Angle Encoding
             qml.AngleEmbedding(
                 inputs,
                 wires=range(n_qubits),
             )
 
             # Entanglement
-
             qml.StronglyEntanglingLayers(
                 weights,
                 wires=range(n_qubits),
             )
-
-            # Multi-axis measurements
 
             measurements = []
 
@@ -115,12 +116,18 @@ class QuantumEvolutionLayer(nn.Module):
 
         B, K, D = H.shape
 
-        # Normalize before encoding
+        # -----------------------------------------
+        # Normalize hypotheses
+        # -----------------------------------------
 
         H_norm = F.normalize(
             H,
             dim=-1,
         )
+
+        # -----------------------------------------
+        # Compress
+        # -----------------------------------------
 
         z = self.compress(
             H_norm.reshape(
@@ -131,29 +138,42 @@ class QuantumEvolutionLayer(nn.Module):
 
         z = torch.tanh(z) * math.pi
 
+        # -----------------------------------------
+        # Quantum evolution
+        # -----------------------------------------
+
         q = self.quantum(z)
 
         q = self.expand(q)
 
+        # -----------------------------------------
+        # Residual fusion
+        # -----------------------------------------
+
+        H_flat = H.reshape(
+            B * K,
+            D,
+        )
+
         gate = self.fusion_gate(
             torch.cat(
                 [
-                    H.reshape(
-                        B * K,
-                        D,
-                    ),
+                    H_flat,
                     q,
                 ],
                 dim=-1,
             )
         )
 
-        q = gate * q + (1.0 - gate) * H.reshape(
-            B * K,
-            D,
-        )
+        q = gate * q + (1.0 - gate) * H_flat
 
-        energy = self.energy_head(q).squeeze(-1)
+        # -----------------------------------------
+        # Bounded Hamiltonian Energy
+        # -----------------------------------------
+
+        energy = torch.tanh(self.energy_head(q)).squeeze(-1)
+
+        # -----------------------------------------
 
         q = q.reshape(
             B,

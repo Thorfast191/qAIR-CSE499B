@@ -14,29 +14,36 @@ class CollapseController(nn.Module):
     Returns
     -------
     probabilities : (B, K)
+
+    Notes
+    -----
+    - Lower energy -> higher collapse probability
+    - Uses Boltzmann amplitudes followed by the Born Rule
     """
 
     def __init__(self):
 
         super().__init__()
 
-        # Learnable inverse temperature
-        self.temperature = nn.Parameter(torch.tensor(2.0))
+        # Learnable temperature
+        # Effective temperature:
+        # T = 0.5 + softplus(parameter)
+        self.temperature = nn.Parameter(torch.tensor(0.0))
 
-        # Learnable collapse bias
+        # Learnable bias
         self.bias = nn.Parameter(torch.zeros(1))
 
     def forward(self, energy):
 
-        # ---------------------------------------------
-        # Save raw energy for metrics
-        # ---------------------------------------------
+        # =====================================================
+        # Preserve raw energy for metrics
+        # =====================================================
 
         raw_energy = energy.clone()
 
-        # ---------------------------------------------
-        # Normalize energy (stable optimization)
-        # ---------------------------------------------
+        # =====================================================
+        # Normalize energy
+        # =====================================================
 
         energy = energy - energy.mean(
             dim=1,
@@ -51,11 +58,21 @@ class CollapseController(nn.Module):
             + 1e-6
         )
 
-        # ---------------------------------------------
-        # Quantum amplitudes
-        # ---------------------------------------------
+        energy = torch.clamp(
+            energy,
+            -3.0,
+            3.0,
+        )
 
-        amplitude = torch.exp(-self.temperature * energy + self.bias)
+        # =====================================================
+        # Boltzmann Amplitudes
+        # =====================================================
+
+        temperature = 0.5 + F.softplus(self.temperature)
+
+        amplitude = torch.exp(-energy / temperature + self.bias)
+
+        # Normalize amplitudes
 
         amplitude = amplitude / (
             amplitude.sum(
@@ -65,9 +82,9 @@ class CollapseController(nn.Module):
             + 1e-8
         )
 
-        # ---------------------------------------------
+        # =====================================================
         # Born Rule
-        # ---------------------------------------------
+        # =====================================================
 
         probabilities = amplitude.pow(2)
 
@@ -79,13 +96,11 @@ class CollapseController(nn.Module):
             + 1e-8
         )
 
-        # ---------------------------------------------
+        # =====================================================
         # Metrics
-        # ---------------------------------------------
+        # =====================================================
 
         entropy = -(probabilities * torch.log(probabilities + 1e-8)).sum(dim=1).mean()
-
-        # Compute metrics BEFORE normalization
 
         diversity = raw_energy.var(dim=1).mean()
 
@@ -93,15 +108,23 @@ class CollapseController(nn.Module):
 
         peak = probabilities.max(dim=1).values.mean()
 
-        # ---------------------------------------------
-        # Collapse loss
-        # ---------------------------------------------
+        # =====================================================
+        # Stable Collapse Loss
+        # =====================================================
 
-        collapse_loss = 0.05 * entropy - 0.05 * diversity - 0.02 * spread
+        target_diversity = 1.0
+        target_spread = 2.0
+
+        collapse_loss = (
+            0.05 * entropy
+            + 0.01 * (diversity - target_diversity).pow(2)
+            + 0.005 * (spread - target_spread).pow(2)
+        )
 
         return {
             "energy": energy,
             "raw_energy": raw_energy,
+            "temperature": temperature.detach(),
             "amplitude": amplitude,
             "probabilities": probabilities,
             "entropy": entropy,

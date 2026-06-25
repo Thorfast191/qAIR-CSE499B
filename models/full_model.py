@@ -36,6 +36,8 @@ class QAIRvNext(nn.Module):
 
         self.selector = EnergyAnswerSelector(dim)
 
+        self.energy_alpha = nn.Parameter(torch.tensor(0.0))
+
         self.collapse = CollapseController()
 
     def forward(self, H, O, y=None):
@@ -89,19 +91,27 @@ class QAIRvNext(nn.Module):
         # Lower energy = better hypothesis
         # ---------------------------------------------------
 
-        selector_energy = answer_energy.mean(dim=-1)  # (B,K)
+        selector_energy = answer_energy.min(dim=-1).values
 
         if quantum_energy is not None:
 
-            collapse_energy = selector_energy + quantum_energy
+            # normalize ONLY quantum energy
+            quantum_energy = quantum_energy - quantum_energy.mean(dim=1, keepdim=True)
 
+            quantum_energy = quantum_energy / (
+                quantum_energy.std(dim=1, keepdim=True) + 1e-6
+            )
+
+            alpha = torch.sigmoid(self.energy_alpha)
+
+            collapse_energy = alpha * selector_energy + (1.0 - alpha) * quantum_energy
         else:
 
             collapse_energy = selector_energy
 
         collapse_out = self.collapse(collapse_energy)
 
-        collapse_probs = collapse_out["probabilities"]  # (B,K)
+        collapse_probs = collapse_out["probabilities"]
 
         # ---------------------------------------------------
         # Final Answer Energy

@@ -5,19 +5,7 @@ import torch.nn.functional as F
 
 class EnergyAnswerSelector(nn.Module):
     """
-    Hamiltonian Energy Network
-
-    Inputs
-    ------
-    H : (B, K, D)
-        Hypothesis embeddings
-
-    O : (B, N, D)
-        Answer embeddings
-
-    Returns
-    -------
-    energy : (B, K, N)
+    Stable Hamiltonian Energy Network
 
     Lower energy = better hypothesis-answer compatibility
     """
@@ -26,14 +14,12 @@ class EnergyAnswerSelector(nn.Module):
 
         super().__init__()
 
-        # Learnable Hamiltonian
         self.hamiltonian = nn.Linear(
             dim,
             dim,
             bias=False,
         )
 
-        # Neural energy function
         self.energy_net = nn.Sequential(
             nn.Linear(dim * 4, dim * 2),
             nn.GELU(),
@@ -44,55 +30,40 @@ class EnergyAnswerSelector(nn.Module):
             nn.Linear(dim, 1),
         )
 
-        # Learnable positive temperature
+        # learnable positive temperature
+
         self.temperature = nn.Parameter(torch.tensor(1.0))
+
+        # learnable weighting
+
+        self.learned_weight = nn.Parameter(torch.tensor(1.0))
+
+        self.hamiltonian_weight = nn.Parameter(torch.tensor(0.5))
+
+        self.cosine_weight = nn.Parameter(torch.tensor(0.5))
 
     def forward(self, H, O):
 
         B, K, D = H.shape
         _, N, _ = O.shape
 
-        # ===================================================
-        # Normalize representations
-        # ===================================================
+        # --------------------------------------------------
+        # Normalize embeddings
+        # --------------------------------------------------
 
-        H = F.normalize(
-            H,
-            dim=-1,
-        )
+        H = F.normalize(H, dim=-1)
 
-        O = F.normalize(
-            O,
-            dim=-1,
-        )
-
-        # ===================================================
-        # Hamiltonian projection
-        # ===================================================
+        O = F.normalize(O, dim=-1)
 
         O_proj = self.hamiltonian(O)
 
-        # ===================================================
-        # Pairwise expansion
-        # ===================================================
+        # --------------------------------------------------
+        # Pairwise tensors
+        # --------------------------------------------------
 
-        H_exp = H.unsqueeze(2).expand(
-            B,
-            K,
-            N,
-            D,
-        )
+        H_exp = H.unsqueeze(2).expand(B, K, N, D)
 
-        O_exp = O_proj.unsqueeze(1).expand(
-            B,
-            K,
-            N,
-            D,
-        )
-
-        # ===================================================
-        # Interaction Features
-        # ===================================================
+        O_exp = O_proj.unsqueeze(1).expand(B, K, N, D)
 
         diff = H_exp - O_exp
 
@@ -108,15 +79,19 @@ class EnergyAnswerSelector(nn.Module):
             dim=-1,
         )
 
-        # ===================================================
-        # Neural Hamiltonian Energy
-        # ===================================================
+        # --------------------------------------------------
+        # Learned energy
+        # --------------------------------------------------
 
         learned_energy = self.energy_net(features).squeeze(-1)
 
-        # ===================================================
-        # Hamiltonian Expectation
-        # ===================================================
+        # Prevent runaway values
+
+        learned_energy = 3.0 * torch.tanh(learned_energy / 3.0)
+
+        # --------------------------------------------------
+        # Hamiltonian expectation
+        # --------------------------------------------------
 
         hamiltonian_energy = -torch.einsum(
             "bkd,bnd->bkn",
@@ -124,9 +99,17 @@ class EnergyAnswerSelector(nn.Module):
             O_proj,
         )
 
-        # ===================================================
-        # Cosine Similarity Prior
-        # ===================================================
+        # Already naturally bounded approximately [-1,1]
+
+        hamiltonian_energy = torch.clamp(
+            hamiltonian_energy,
+            -2.0,
+            2.0,
+        )
+
+        # --------------------------------------------------
+        # Cosine energy
+        # --------------------------------------------------
 
         cosine_energy = -F.cosine_similarity(
             H_exp,
@@ -134,18 +117,32 @@ class EnergyAnswerSelector(nn.Module):
             dim=-1,
         )
 
-        # ===================================================
-        # Final Energy
-        # ===================================================
+        # --------------------------------------------------
+        # Learnable fusion
+        # --------------------------------------------------
 
-        energy = learned_energy + 0.5 * hamiltonian_energy + 0.5 * cosine_energy
+        lw = torch.sigmoid(self.learned_weight)
 
-        # ===================================================
-        # Positive Temperature
-        # ===================================================
+        hw = torch.sigmoid(self.hamiltonian_weight)
 
-        temperature = F.softplus(self.temperature)
+        cw = torch.sigmoid(self.cosine_weight)
 
-        energy = energy * temperature
+        energy = lw * learned_energy + hw * hamiltonian_energy + cw * cosine_energy
+
+        # --------------------------------------------------
+        # Stable temperature
+        # --------------------------------------------------
+
+        temperature = 0.5 + F.softplus(self.temperature)
+
+        energy = energy / temperature
+
+        # Final safeguard
+
+        energy = torch.clamp(
+            energy,
+            -5.0,
+            5.0,
+        )
 
         return energy
