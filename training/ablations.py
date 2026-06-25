@@ -48,13 +48,13 @@ def run_ablation_suite(
 
     train_ds = QAIRDataset(
         split="train",
-        max_samples=5000,
+        max_samples=1000,
         cache_dir=cache_dir,
     )
 
     val_ds = QAIRDataset(
         split="validation",
-        max_samples=1000,
+        max_samples=200,
         cache_dir=cache_dir,
     )
 
