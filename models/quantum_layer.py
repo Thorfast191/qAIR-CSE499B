@@ -14,20 +14,29 @@ class QuantumEvolutionLayer(nn.Module):
     Improvements
     ------------
     • Stable quantum encoding
-    • Residual quantum fusion
-    • Learnable quantum correction
-    • Bounded quantum energy
+    • Residual quantum evolution
+    • Adaptive fusion
+    • Deep Hamiltonian energy
+    • Better optimization stability
     """
 
     def __init__(self, dim, n_qubits=8, n_layers=3):
 
         super().__init__()
 
+        ####################################################
+        # Classical compression
+        ####################################################
+
         self.compress = nn.Sequential(
             nn.Linear(dim, dim),
             nn.GELU(),
             nn.Linear(dim, n_qubits),
         )
+
+        ####################################################
+        # Quantum device
+        ####################################################
 
         dev = qml.device(
             "default.qubit",
@@ -37,33 +46,45 @@ class QuantumEvolutionLayer(nn.Module):
         @qml.qnode(dev, interface="torch")
         def circuit(inputs, weights):
 
-            # Superposition
+            ################################################
+            # Initial Superposition
+            ################################################
+
             for i in range(n_qubits):
                 qml.Hadamard(wires=i)
 
+            ################################################
             # Angle Encoding
+            ################################################
+
             qml.AngleEmbedding(
                 inputs,
                 wires=range(n_qubits),
             )
 
-            # Entanglement
+            ################################################
+            # Variational Evolution
+            ################################################
+
             qml.StronglyEntanglingLayers(
                 weights,
                 wires=range(n_qubits),
             )
 
-            measurements = []
+            ################################################
+            # Measurement
+            ################################################
 
-            for i in range(n_qubits):
-
-                measurements.append(qml.expval(qml.PauliX(i)))
-
-                measurements.append(qml.expval(qml.PauliY(i)))
-
-                measurements.append(qml.expval(qml.PauliZ(i)))
-
-            return measurements
+            return [
+                qml.expval(qml.PauliX(i))
+                for i in range(n_qubits)
+            ] + [
+                qml.expval(qml.PauliY(i))
+                for i in range(n_qubits)
+            ] + [
+                qml.expval(qml.PauliZ(i))
+                for i in range(n_qubits)
+            ]
 
         weight_shapes = {
             "weights": (
@@ -78,6 +99,10 @@ class QuantumEvolutionLayer(nn.Module):
             weight_shapes,
         )
 
+        ####################################################
+        # Expand back
+        ####################################################
+
         self.expand = nn.Sequential(
             nn.Linear(
                 n_qubits * 3,
@@ -86,6 +111,10 @@ class QuantumEvolutionLayer(nn.Module):
             nn.GELU(),
             nn.LayerNorm(dim),
         )
+
+        ####################################################
+        # Residual gate
+        ####################################################
 
         self.fusion_gate = nn.Sequential(
             nn.Linear(
@@ -100,58 +129,78 @@ class QuantumEvolutionLayer(nn.Module):
             nn.Sigmoid(),
         )
 
-        self.energy_head = nn.Sequential(
-            nn.Linear(
-                dim,
-                dim // 2,
-            ),
+        ####################################################
+        # Quantum correction
+        ####################################################
+
+        self.correction = nn.Sequential(
+            nn.Linear(dim, dim),
             nn.GELU(),
-            nn.Linear(
-                dim // 2,
-                1,
-            ),
+            nn.Linear(dim, dim),
         )
+
+        ####################################################
+        # Deep Hamiltonian energy
+        ####################################################
+
+        self.energy_head = nn.Sequential(
+
+            nn.Linear(dim, dim),
+
+            nn.GELU(),
+
+            nn.LayerNorm(dim),
+
+            nn.Linear(dim, dim//2),
+
+            nn.GELU(),
+
+            nn.Linear(dim//2,1)
+
+        )
+
+        self.norm = nn.LayerNorm(dim)
 
     def forward(self, H):
 
-        B, K, D = H.shape
+        B,K,D = H.shape
 
-        # -----------------------------------------
-        # Normalize hypotheses
-        # -----------------------------------------
+        ####################################################
+        # Normalize
+        ####################################################
 
         H_norm = F.normalize(
             H,
             dim=-1,
         )
 
-        # -----------------------------------------
+        ####################################################
         # Compress
-        # -----------------------------------------
+        ####################################################
 
         z = self.compress(
             H_norm.reshape(
-                B * K,
+                B*K,
                 D,
             )
         )
 
-        z = torch.tanh(z) * math.pi
+        z = math.pi * torch.tanh(z)
 
-        # -----------------------------------------
-        # Quantum evolution
-        # -----------------------------------------
+        ####################################################
+        # Quantum Evolution
+        ####################################################
 
         q = self.quantum(z)
 
         q = self.expand(q)
 
-        # -----------------------------------------
+        ####################################################
         # Residual fusion
-        # -----------------------------------------
+        ####################################################
 
         H_flat = H.reshape(
-            B * K,
+            B*K,
             D,
         )
 
@@ -165,15 +214,27 @@ class QuantumEvolutionLayer(nn.Module):
             )
         )
 
-        q = gate * q + (1.0 - gate) * H_flat
+        q = gate*q + (1-gate)*H_flat
 
-        # -----------------------------------------
-        # Bounded Hamiltonian Energy
-        # -----------------------------------------
+        ####################################################
+        # Quantum correction
+        ####################################################
 
-        energy = torch.tanh(self.energy_head(q)).squeeze(-1)
+        q = self.norm(
+            q + self.correction(q)
+        )
 
-        # -----------------------------------------
+        ####################################################
+        # Hamiltonian energy
+        ####################################################
+
+        energy = self.energy_head(q)
+
+        energy = torch.tanh(energy).squeeze(-1)
+
+        ####################################################
+        # Reshape
+        ####################################################
 
         q = q.reshape(
             B,

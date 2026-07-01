@@ -116,28 +116,34 @@ class QAIRDataset(Dataset):
                 # HYPOTHESIS GENERATION
                 # ============================================
 
-                hypotheses = generator.generate(stem, options)
+                hypotheses = generator.generate(question=stem, options=options,)
 
                 # ============================================
                 # EMBEDDINGS
                 # ============================================
 
                 H = encoder.encode(hypotheses)
-                H = torch.nn.functional.normalize(H, dim=-1).cpu()
 
                 O = encoder.encode(options)
-                O = torch.nn.functional.normalize(O, dim=-1).cpu()
 
                 # ============================================
                 # SAMPLE
                 # ============================================
 
                 sample = {
+
                     "question": stem,
+
                     "options": options,
+
                     "hypotheses": hypotheses,
+
+                    "option_index": list(range(len(options))),
+
                     "H": H,
+
                     "O": O,
+
                     "y": y,
                 }
 
@@ -151,7 +157,18 @@ class QAIRDataset(Dataset):
 
                 if count % 50 == 0:
 
-                    torch.save(self.samples, cache_path)
+                    cache = {
+
+                        "samples": self.samples,
+
+                        "encoder": "MiniLM-L6-v2",
+
+                        "generator": "Qwen2.5",
+
+                        "version": 32,
+                    }
+
+                    torch.save(cache, cache_path)                
 
                     print(f"[AUTOSAVE] " f"{count} samples")
 
@@ -221,10 +238,10 @@ def collate_fn(batch):
 
         if H.shape[0] < max_h:
 
-            pad = H.mean(
-                dim=0,
-                keepdim=True,
-            ).repeat(max_h - H.shape[0], 1)
+            pad = torch.zeros(
+                max_h - h_len,
+                dim,
+            )
 
             H = torch.cat([H, pad], dim=0)
 
@@ -234,10 +251,10 @@ def collate_fn(batch):
 
         if O.shape[0] < max_o:
 
-            pad = O.mean(
-                dim=0,
-                keepdim=True,
-            ).repeat(max_o - O.shape[0], 1)
+            pad = torch.zeros(
+                max_o - o_len,
+                dim,
+            )
 
             O = torch.cat([O, pad], dim=0)
 

@@ -5,45 +5,61 @@ import torch.nn.functional as F
 
 class CollapseController(nn.Module):
     """
-    Learnable Quantum Collapse Controller
+    Adaptive Quantum Collapse Controller
 
-    Input
-    -----
-    energy : (B, K)
-
-    Returns
-    -------
-    probabilities : (B, K)
-
-    Notes
-    -----
-    - Lower energy -> higher collapse probability
-    - Uses Boltzmann amplitudes followed by the Born Rule
+    Improvements
+    ------------
+    • Per-sample temperature
+    • Per-sample collapse bias
+    • Confidence estimation
+    • Numerically stable Born Rule
     """
 
     def __init__(self):
 
         super().__init__()
 
-        # Learnable temperature
-        # Effective temperature:
-        # T = 0.5 + softplus(parameter)
-        self.temperature = nn.Parameter(torch.tensor(0.0))
+        ####################################################
+        # Collapse encoder
+        ####################################################
 
-        # Learnable bias
-        self.bias = nn.Parameter(torch.zeros(1))
+        self.encoder = nn.Sequential(
+            nn.Linear(1, 32),
+            nn.GELU(),
+            nn.Linear(32, 32),
+            nn.GELU(),
+        )
+
+        ####################################################
+        # Adaptive temperature
+        ####################################################
+
+        self.temperature = nn.Linear(32, 1)
+
+        ####################################################
+        # Adaptive bias
+        ####################################################
+
+        self.bias = nn.Linear(32, 1)
+
+        ####################################################
+        # Confidence
+        ####################################################
+
+        self.confidence = nn.Sequential(
+            nn.Linear(32,16),
+            nn.GELU(),
+            nn.Linear(16,1),
+            nn.Sigmoid(),
+        )
 
     def forward(self, energy):
 
-        # =====================================================
-        # Preserve raw energy for metrics
-        # =====================================================
+        raw_energy = energy
 
-        raw_energy = energy.clone()
-
-        # =====================================================
-        # Normalize energy
-        # =====================================================
+        ####################################################
+        # Normalize
+        ####################################################
 
         energy = energy - energy.mean(
             dim=1,
@@ -58,21 +74,44 @@ class CollapseController(nn.Module):
             + 1e-6
         )
 
-        energy = torch.clamp(
-            energy,
-            -3.0,
-            3.0,
+        ####################################################
+        # Encode energy distribution
+        ####################################################
+
+        z = self.encoder(
+            energy.unsqueeze(-1)
         )
 
-        # =====================================================
-        # Boltzmann Amplitudes
-        # =====================================================
+        z_global = z.mean(dim=1)
 
-        temperature = 0.5 + F.softplus(self.temperature)
+        ####################################################
+        # Adaptive parameters
+        ####################################################
 
-        amplitude = torch.exp(-energy / temperature + self.bias)
+        temperature = (
+            0.5
+            +
+            F.softplus(
+                self.temperature(z_global)
+            )
+        )
 
-        # Normalize amplitudes
+        bias = self.bias(z_global)
+
+        confidence = self.confidence(z_global).squeeze(-1)
+
+        ####################################################
+        # Stable Born Rule
+        ####################################################
+
+        log_amp = -energy / temperature + bias
+
+        log_amp = log_amp - log_amp.max(
+            dim=1,
+            keepdim=True,
+        ).values
+
+        amplitude = torch.exp(log_amp)
 
         amplitude = amplitude / (
             amplitude.sum(
@@ -81,10 +120,6 @@ class CollapseController(nn.Module):
             )
             + 1e-8
         )
-
-        # =====================================================
-        # Born Rule
-        # =====================================================
 
         probabilities = amplitude.pow(2)
 
@@ -96,40 +131,60 @@ class CollapseController(nn.Module):
             + 1e-8
         )
 
-        # =====================================================
+        ####################################################
         # Metrics
-        # =====================================================
+        ####################################################
 
-        entropy = -(probabilities * torch.log(probabilities + 1e-8)).sum(dim=1).mean()
+        entropy = -(probabilities * torch.log(probabilities + 1e-8)).sum(dim=1)
 
-        diversity = raw_energy.var(dim=1).mean()
+        diversity = raw_energy.var(dim=1)
 
-        spread = (raw_energy.max(dim=1).values - raw_energy.min(dim=1).values).mean()
+        spread = raw_energy.max(dim=1).values - raw_energy.min(dim=1).values
 
-        peak = probabilities.max(dim=1).values.mean()
+        peak = probabilities.max(dim=1).values
 
-        # =====================================================
-        # Stable Collapse Loss
-        # =====================================================
+        ####################################################
+        # Adaptive collapse objective
+        ####################################################
 
-        target_diversity = 1.0
-        target_spread = 2.0
+        target_entropy = 1.0 - confidence
 
         collapse_loss = (
-            0.05 * entropy
-            + 0.01 * (diversity - target_diversity).pow(2)
-            + 0.005 * (spread - target_spread).pow(2)
+
+            0.10 * (entropy - target_entropy).pow(2).mean()
+
+            +
+
+            0.01 * diversity.mean()
+
+            +
+
+            0.005 * spread.mean()
+
         )
 
         return {
+
             "energy": energy,
+
             "raw_energy": raw_energy,
-            "temperature": temperature.detach(),
-            "amplitude": amplitude,
+
             "probabilities": probabilities,
-            "entropy": entropy,
-            "diversity": diversity,
-            "spread": spread,
-            "peak": peak,
+
+            "amplitude": amplitude,
+
+            "temperature": temperature.mean().detach(),
+
+            "confidence": confidence,
+
+            "entropy": entropy.mean(),
+
+            "diversity": diversity.mean(),
+
+            "spread": spread.mean(),
+
+            "peak": peak.mean(),
+
             "collapse_loss": collapse_loss,
+
         }

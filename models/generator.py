@@ -1,6 +1,7 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM
-
+import re
 import torch
+
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 LLM_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
 
@@ -11,7 +12,10 @@ class HypothesisGenerator:
 
         self.device = device
 
-        self.tokenizer = AutoTokenizer.from_pretrained(LLM_NAME, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            LLM_NAME,
+            trust_remote_code=True,
+        )
 
         self.model = AutoModelForCausalLM.from_pretrained(
             LLM_NAME,
@@ -22,80 +26,49 @@ class HypothesisGenerator:
 
         self.model.eval()
 
-    # ========================================================
+    # ==========================================================
     # PROMPT
-    # ========================================================
+    # ==========================================================
 
     def build_prompt(self, question, options):
 
-        option_block = "\n".join([f"{chr(65+i)}. {o}" for i, o in enumerate(options)])
+        option_block = "\n".join(
+            [
+                f"{chr(65+i)}. {opt}"
+                for i, opt in enumerate(options)
+            ]
+        )
 
         return f"""
+You are an expert scientific reasoning engine.
+
 Question:
 {question}
 
-Options:
+Candidate Answers:
 {option_block}
 
-Generate EXACTLY four hypotheses.
+Task:
 
-1. Causal Hypothesis
-2. Contradictory Hypothesis
-3. Elimination Hypothesis
-4. Counterfactual Hypothesis
+For EACH candidate answer, assume it is correct and write ONE
+short hypothesis supporting that answer.
 
-Requirements:
-- One hypothesis per line
-- Keep each hypothesis under 25 words
-- Do not explain
-- Do not number the output
+Requirements
+
+- Produce EXACTLY {len(options)} hypotheses.
+- One hypothesis per answer.
+- Keep each hypothesis under 20 words.
+- Make every hypothesis plausible.
+- Do NOT explain.
+- Do NOT number.
+- Output only the hypotheses.
 """
 
-    # ========================================================
-    # GENERATE
-    # ========================================================
+    # ==========================================================
+    # CLEAN PARSER
+    # ==========================================================
 
-    @torch.no_grad()
-    def generate(self, question, options):
-
-        prompt = self.build_prompt(question, options)
-
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a reasoning engine that " "creates diverse hypotheses."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ]
-
-        text_input = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-
-        inp = self.tokenizer(text_input, return_tensors="pt").to(self.device)
-
-        out = self.model.generate(
-            **inp,
-            max_new_tokens=128,
-            temperature=0.7,
-            top_p=0.9,
-            do_sample=True,
-            pad_token_id=self.tokenizer.eos_token_id,
-        )
-
-        # ====================================================
-        # ONLY DECODE NEW TOKENS
-        # ====================================================
-
-        generated_tokens = out[0][inp["input_ids"].shape[1] :]
-
-        text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
-
-        # ====================================================
-        # PARSE
-        # ====================================================
+    def parse_output(self, text, expected):
 
         hypotheses = []
 
@@ -106,45 +79,106 @@ Requirements:
             if not line:
                 continue
 
-            if len(line) < 10:
-                continue
+            # Remove bullets / numbering / A. B. 1)
+            line = re.sub(
+                r"^[A-Za-z0-9\.\)\:\-\•\*\s]+",
+                "",
+                line,
+            )
 
-            if line.lower().startswith(("question", "options")):
+            line = line.strip()
+
+            if len(line) < 8:
                 continue
 
             hypotheses.append(line)
 
-        # ====================================================
-        # CLEANUP
-        # ====================================================
+        return hypotheses[:expected]
 
-        cleaned = []
+    # ==========================================================
+    # FALLBACK
+    # ==========================================================
 
-        for h in hypotheses:
+    def fallback(self, question, options):
 
-            h = h.lstrip("1234567890.-) ")
+        hyps = []
 
-            h = h.strip()
+        for option in options:
 
-            if len(h) > 5:
+            hyps.append(
+                f"If '{option}' is correct, then it best explains the question."
+            )
 
-                cleaned.append(h)
+        return hyps
 
-        hypotheses = cleaned[:4]
+    # ==========================================================
+    # GENERATE
+    # ==========================================================
 
-        # ====================================================
-        # FALLBACKS
-        # ====================================================
+    @torch.no_grad()
+    def generate(self, question, options):
 
-        fallback_templates = [
-            f"The evidence supports {options[0]}.",
-            f"A contradiction emerges if {options[min(1, len(options)-1)]} is correct.",
-            f"Elimination favors {options[min(2, len(options)-1)]}.",
-            f"A counterfactual perspective suggests {options[min(3, len(options)-1)]}.",
+        prompt = self.build_prompt(
+            question,
+            options,
+        )
+
+        messages = [
+            {
+                "role": "system",
+                "content":
+                    "You generate concise scientific hypotheses.",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
         ]
 
-        while len(hypotheses) < 4:
+        text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
 
-            hypotheses.append(fallback_templates[len(hypotheses)])
+        inputs = self.tokenizer(
+            text,
+            return_tensors="pt",
+        ).to(self.device)
 
-        return hypotheses[:4]
+        outputs = self.model.generate(
+            **inputs,
+            max_new_tokens=96,
+            temperature=0.2,
+            top_p=0.95,
+            do_sample=True,
+            repetition_penalty=1.10,
+            pad_token_id=self.tokenizer.eos_token_id,
+        )
+
+        generated = outputs[0][inputs["input_ids"].shape[1]:]
+
+        decoded = self.tokenizer.decode(
+            generated,
+            skip_special_tokens=True,
+        )
+
+        hypotheses = self.parse_output(
+            decoded,
+            len(options),
+        )
+
+        if len(hypotheses) < len(options):
+
+            fallback = self.fallback(
+                question,
+                options,
+            )
+
+            while len(hypotheses) < len(options):
+
+                hypotheses.append(
+                    fallback[len(hypotheses)]
+                )
+
+        return hypotheses[:len(options)]

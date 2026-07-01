@@ -5,58 +5,75 @@ import torch.nn.functional as F
 
 class HypothesisValidator(nn.Module):
     """
-    Quantum-Inspired Hypothesis Validator
+    Adaptive Quantum Hypothesis Validator
 
-    Four observable energies:
-
-        • causal
-        • diversity
-        • specificity
-        • relevance
-
-    These are combined into a Hamiltonian energy,
-    converted into Born probabilities,
-    and used to generate a reasoning potential.
-
-    No Softmax.
+    Improvements
+    ------------
+    • Adaptive observable weighting
+    • Reliability estimation
+    • Stable Born collapse
+    • Confidence-aware reasoning potential
     """
 
     def __init__(self, dim):
 
         super().__init__()
 
-        self.score_net = nn.Sequential(
+        ####################################################
+        # Shared feature encoder
+        ####################################################
+
+        self.encoder = nn.Sequential(
             nn.Linear(dim * 4, dim * 2),
             nn.GELU(),
             nn.LayerNorm(dim * 2),
             nn.Dropout(0.10),
             nn.Linear(dim * 2, dim),
             nn.GELU(),
+        )
+
+        ####################################################
+        # Observable heads
+        ####################################################
+
+        self.causal = nn.Linear(dim, 1)
+        self.diversity = nn.Linear(dim, 1)
+        self.specificity = nn.Linear(dim, 1)
+        self.relevance = nn.Linear(dim, 1)
+
+        ####################################################
+        # NEW
+        # Adaptive observable fusion
+        ####################################################
+
+        self.observable_gate = nn.Sequential(
+            nn.Linear(dim, dim),
+            nn.GELU(),
             nn.Linear(dim, 4),
         )
 
-        self.potential_net = nn.Sequential(
-            nn.Linear(dim * 4, dim * 2),
+        ####################################################
+        # Reliability prediction
+        ####################################################
+
+        self.reliability = nn.Sequential(
+            nn.Linear(dim, dim),
             nn.GELU(),
-            nn.Linear(dim * 2, dim),
+            nn.Linear(dim, 1),
+            nn.Sigmoid(),
         )
 
-        # Learnable observable coefficients
-        self.observable_weights = nn.Parameter(
-            torch.tensor(
-                [
-                    0.40,
-                    0.20,
-                    0.20,
-                    0.20,
-                ]
-            )
+        ####################################################
+        # Reasoning potential
+        ####################################################
+
+        self.potential = nn.Sequential(
+            nn.Linear(dim + 1, dim),
+            nn.GELU(),
+            nn.Linear(dim, dim),
         )
 
-        # Learnable temperature
-        self.temperature = nn.Parameter(
-            torch.tensor(1.0)
-        )
+        self.temperature = nn.Parameter(torch.tensor(1.0))
 
     def forward(self, H, O, y=None):
 
@@ -66,13 +83,8 @@ class HypothesisValidator(nn.Module):
         H = F.normalize(H, dim=-1)
         O = F.normalize(O, dim=-1)
 
-        H_exp = H.unsqueeze(2).expand(
-            B, K, N, D
-        )
-
-        O_exp = O.unsqueeze(1).expand(
-            B, K, N, D
-        )
+        H_exp = H.unsqueeze(2).expand(B, K, N, D)
+        O_exp = O.unsqueeze(1).expand(B, K, N, D)
 
         diff = H_exp - O_exp
         prod = H_exp * O_exp
@@ -87,12 +99,24 @@ class HypothesisValidator(nn.Module):
             dim=-1,
         )
 
-        scores = self.score_net(features)
+        ####################################################
+        # Shared representation
+        ####################################################
 
-        causal = scores[..., 0]
-        diversity = scores[..., 1]
-        specificity = scores[..., 2]
-        relevance = scores[..., 3]
+        z = self.encoder(features)
+
+        ####################################################
+        # Observables
+        ####################################################
+
+        causal = self.causal(z).squeeze(-1)
+        diversity = self.diversity(z).squeeze(-1)
+        specificity = self.specificity(z).squeeze(-1)
+        relevance = self.relevance(z).squeeze(-1)
+
+        ####################################################
+        # Supervised relevance
+        ####################################################
 
         target = None
 
@@ -107,54 +131,41 @@ class HypothesisValidator(nn.Module):
             ] = 1.0
 
         ####################################################
-        # Potential
+        # Adaptive observable weights
         ####################################################
 
-        potential = self.potential_net(features)
-
-        ####################################################
-        # Hamiltonian Energy
-        ####################################################
-
-        w = F.softplus(
-            self.observable_weights
+        gate = self.observable_gate(
+            z.mean(dim=2)
         )
 
-        w = w / (
-            w.sum() + 1e-8
+        weights = F.softmax(
+            gate,
+            dim=-1,
         )
 
-        quality_energy = (
+        energy = (
 
-            w[0] * causal
+            weights[..., 0] * causal.mean(dim=2)
 
             +
 
-            w[1] * diversity
+            weights[..., 1] * diversity.mean(dim=2)
 
             +
 
-            w[2] * specificity
+            weights[..., 2] * specificity.mean(dim=2)
 
             +
 
-            w[3] * relevance
+            weights[..., 3] * relevance.mean(dim=2)
 
         )
 
         ####################################################
-        # One energy per hypothesis
+        # Stable Born Rule
         ####################################################
 
-        quality_energy = quality_energy.mean(
-            dim=2
-        )
-
-        ####################################################
-        # Born Rule
-        ####################################################
-
-        energy = -quality_energy
+        energy = -energy
 
         energy = energy - energy.mean(
             dim=1,
@@ -169,23 +180,19 @@ class HypothesisValidator(nn.Module):
             + 1e-6
         )
 
-        energy = torch.clamp(
-            energy,
-            -3,
-            3,
-        )
-
         temperature = (
             0.5
-            +
-            F.softplus(
-                self.temperature
-            )
+            + F.softplus(self.temperature)
         )
 
-        amplitude = torch.exp(
-            -energy / temperature
-        )
+        log_amp = -energy / temperature
+
+        log_amp = log_amp - log_amp.max(
+            dim=1,
+            keepdim=True,
+        ).values
+
+        amplitude = torch.exp(log_amp)
 
         amplitude = amplitude / (
             amplitude.sum(
@@ -206,10 +213,30 @@ class HypothesisValidator(nn.Module):
         )
 
         ####################################################
-        # Weight potential
+        # Reliability
         ####################################################
 
-        potential = potential.mean(dim=2)
+        reliability = self.reliability(
+            z.mean(dim=2)
+        )
+
+        reliability = reliability.squeeze(-1)
+
+        ####################################################
+        # Confidence-aware potential
+        ####################################################
+
+        potential_input = torch.cat(
+            [
+                z.mean(dim=2),
+                reliability.unsqueeze(-1),
+            ],
+            dim=-1,
+        )
+
+        potential = self.potential(
+            potential_input
+        )
 
         potential = (
             potential
@@ -221,9 +248,13 @@ class HypothesisValidator(nn.Module):
 
             "potential": potential,
 
-            "validator_energy": quality_energy,
+            "validator_energy": energy,
 
             "validator_probabilities": probabilities,
+
+            "reliability": reliability,
+
+            "observable_weights": weights,
 
             "causal": causal.mean(dim=2),
 
