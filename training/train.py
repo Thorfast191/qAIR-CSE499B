@@ -104,7 +104,7 @@ class Trainer:
                 self.optim.zero_grad(set_to_none=True)
                 with autocast(device_type="cuda", enabled=(self.device == "cuda")):
                     outputs = self.model(H, O, y)
-                    loss = compute_loss(outputs, y)
+                    loss = outputs["scores"].sum()
 
                 if outputs.get("validator") is not None and not printed_energy:
 
