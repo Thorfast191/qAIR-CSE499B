@@ -59,7 +59,7 @@ def run_training(
 
     model = QAIRvNext(
         dim=DIM,
-        use_quantum=True,
+        use_quantum=False,
         use_validator=True,
         persistent_steps=3,
     ).to(device)
