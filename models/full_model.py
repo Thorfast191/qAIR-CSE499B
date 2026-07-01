@@ -42,386 +42,195 @@ class QAIRvNext(nn.Module):
 
     def forward(self, H, O, y=None):
 
-    ####################################################
-    # Persistent Reasoning
-    ####################################################
+        ####################################################
+        # Persistent Reasoning
+        ####################################################
 
-    H, trajectory, interaction = self.reasoner(H)
+        H, trajectory, interaction = self.reasoner(H)
 
-    ####################################################
-    # Quantum Evolution
-    ####################################################
+        ####################################################
+        # Quantum Evolution
+        ####################################################
 
-    quantum_energy = None
+        quantum_energy = None
 
-    if self.use_quantum:
+        if self.use_quantum:
 
-        q_state, quantum_energy = self.quantum(H)
+            q_state, quantum_energy = self.quantum(H)
 
-        H = H + q_state
+            H = H + q_state
 
-    ####################################################
-    # Validator AFTER reasoning
-    ####################################################
+        ####################################################
+        # Validator AFTER reasoning
+        ####################################################
 
-    validator_out = None
-    validator_energy = None
-    potential = None
+        validator_out = None
+        validator_energy = None
+        potential = None
 
-    if self.use_validator:
+        if self.use_validator:
 
-        validator_out = self.validator(
+            validator_out = self.validator(
+                H,
+                O,
+                y,
+            )
+
+            potential = validator_out["potential"]
+
+            validator_energy = validator_out[
+                "validator_energy"
+            ]
+
+        ####################################################
+        # Adaptive Answer Selector
+        ####################################################
+
+        selector = self.selector(
             H,
             O,
-            y,
         )
 
-        potential = validator_out["potential"]
+        answer_energy = selector["energy"]
 
-        validator_energy = validator_out[
-            "validator_energy"
+        selector_confidence = selector["confidence"]
+
+        ####################################################
+        # Free Energy over Answers
+        ####################################################
+
+        tau = 1.0
+
+        selector_energy = -tau * torch.logsumexp(
+            -answer_energy / tau,
+            dim=-1,
+        )
+
+        ####################################################
+        # Collapse Energy
+        ####################################################
+
+        collapse_energy = selector_energy
+
+        if quantum_energy is not None:
+
+            quantum_energy = (
+                quantum_energy
+                - quantum_energy.mean(dim=1, keepdim=True)
+            )
+
+            quantum_energy = (
+                quantum_energy
+                /
+                (
+                    quantum_energy.std(
+                        dim=1,
+                        keepdim=True,
+                    )
+                    + 1e-6
+                )
+            )
+
+            alpha = torch.sigmoid(
+                self.energy_alpha
+            )
+
+            collapse_energy = (
+                alpha * collapse_energy
+                +
+                (1.0 - alpha) * quantum_energy
+            )
+
+        ####################################################
+        # Validator Guidance
+        ####################################################
+
+        if validator_energy is not None:
+
+            validator_energy = (
+                validator_energy
+                - validator_energy.mean(
+                    dim=1,
+                    keepdim=True,
+                )
+            )
+
+            validator_energy = (
+                validator_energy
+                /
+                (
+                    validator_energy.std(
+                        dim=1,
+                        keepdim=True,
+                    )
+                    + 1e-6
+                )
+            )
+
+            collapse_energy = (
+                collapse_energy
+                +
+                0.30 * validator_energy
+            )
+
+        ####################################################
+        # Collapse
+        ####################################################
+
+        collapse_out = self.collapse(
+            collapse_energy
+        )
+
+        collapse_probs = collapse_out[
+            "probabilities"
         ]
 
-    ####################################################
-    # Adaptive Answer Selector
-    ####################################################
-
-    selector = self.selector(
-        H,
-        O,
-    )
-
-    answer_energy = selector["energy"]
-
-    selector_confidence = selector["confidence"]
-
-    ####################################################
-    # Free Energy over Answers
-    ####################################################
-
-    tau = 1.0
-
-    selector_energy = -tau * torch.logsumexp(
-        -answer_energy / tau,
-        dim=-1,
-    )
-
-    ####################################################
-    # Collapse Energy
-    ####################################################
-
-    collapse_energy = selector_energy
-
-    if quantum_energy is not None:
-
-        quantum_energy = (
-            quantum_energy
-            - quantum_energy.mean(dim=1, keepdim=True)
-        )
+        ####################################################
+        # Final Answer Energy
+        ####################################################
 
-        quantum_energy = (
-            quantum_energy
-            /
-            (
-                quantum_energy.std(
-                    dim=1,
-                    keepdim=True,
-                )
-                + 1e-6
-            )
-        )
+        final_energy = (
+            answer_energy
+            * collapse_probs.unsqueeze(-1)
+        ).sum(dim=1)
 
-        alpha = torch.sigmoid(
-            self.energy_alpha
-        )
+        final_scores = -final_energy
 
-        collapse_energy = (
-            alpha * collapse_energy
-            +
-            (1.0 - alpha) * quantum_energy
-        )
+        ####################################################
+        # Return
+        ####################################################
 
-    ####################################################
-    # Validator Guidance
-    ####################################################
+        return {
 
-    if validator_energy is not None:
+            "scores": final_scores,
 
-        validator_energy = (
-            validator_energy
-            - validator_energy.mean(
-                dim=1,
-                keepdim=True,
-            )
-        )
+            "answer_energy": answer_energy,
 
-        validator_energy = (
-            validator_energy
-            /
-            (
-                validator_energy.std(
-                    dim=1,
-                    keepdim=True,
-                )
-                + 1e-6
-            )
-        )
+            "collapse_energy": collapse_energy,
 
-        collapse_energy = (
-            collapse_energy
-            +
-            0.30 * validator_energy
-        )
+            "collapse_probs": collapse_probs,
 
-    ####################################################
-    # Collapse
-    ####################################################
+            "selector_confidence": selector_confidence,
 
-    collapse_out = self.collapse(
-        collapse_energy
-    )
+            "quantum_energy": quantum_energy,
 
-    collapse_probs = collapse_out[
-        "probabilities"
-    ]
+            "collapse_loss": collapse_out["collapse_loss"],
 
-    ####################################################
-    # Final Answer Energy
-    ####################################################
+            "entropy": collapse_out["entropy"],
 
-    final_energy = (
-        answer_energy
-        * collapse_probs.unsqueeze(-1)
-    ).sum(dim=1)
+            "diversity": collapse_out["diversity"],
 
-    final_scores = -final_energy
+            "spread": collapse_out["spread"],
 
-    ####################################################
-    # Return
-    ####################################################
+            "peak": collapse_out["peak"],
 
-    return {
+            "validator_potential": potential,
 
-        "scores": final_scores,
+            "trajectory": trajectory,
 
-        "answer_energy": answer_energy,
+            "attention": interaction,
 
-        "collapse_energy": collapse_energy,
+            "validator": validator_out,
+        }
 
-        "collapse_probs": collapse_probs,
-
-        "selector_confidence": selector_confidence,
-
-        "quantum_energy": quantum_energy,
-
-        "collapse_loss": collapse_out["collapse_loss"],
-
-        "entropy": collapse_out["entropy"],
-
-        "diversity": collapse_out["diversity"],
-
-        "spread": collapse_out["spread"],
-
-        "peak": collapse_out["peak"],
-
-        "validator_potential": potential,
-
-        "trajectory": trajectory,
-
-        "attention": interaction,
-
-        "validator": validator_out,
-    }
-
-    ####################################################
-    # Persistent Reasoning
-    ####################################################
-
-    H, trajectory, interaction = self.reasoner(H)
-
-    ####################################################
-    # Quantum Evolution
-    ####################################################
-
-    quantum_energy = None
-
-    if self.use_quantum:
-
-        q_state, quantum_energy = self.quantum(H)
-
-        H = H + q_state
-
-    ####################################################
-    # Validator AFTER reasoning
-    ####################################################
-
-    validator_out = None
-    validator_energy = None
-    potential = None
-
-    if self.use_validator:
-
-        validator_out = self.validator(
-            H,
-            O,
-            y,
-        )
-
-        potential = validator_out["potential"]
-
-        validator_energy = validator_out[
-            "validator_energy"
-        ]
-
-    ####################################################
-    # Adaptive Answer Selector
-    ####################################################
-
-    selector = self.selector(
-        H,
-        O,
-    )
-
-    answer_energy = selector["energy"]
-
-    selector_confidence = selector["confidence"]
-
-    ####################################################
-    # Free Energy over answers
-    ####################################################
-
-    tau = 1.0
-
-    selector_energy = -tau * torch.logsumexp(
-        -answer_energy / tau,
-        dim=-1,
-    )
-
-    ####################################################
-    # Collapse Energy
-    ####################################################
-
-    collapse_energy = selector_energy
-
-    if quantum_energy is not None:
-
-        quantum_energy = (
-            quantum_energy
-            - quantum_energy.mean(dim=1, keepdim=True)
-        )
-
-        quantum_energy = (
-            quantum_energy
-            /
-            (
-                quantum_energy.std(
-                    dim=1,
-                    keepdim=True,
-                )
-                + 1e-6
-            )
-        )
-
-        alpha = torch.sigmoid(
-            self.energy_alpha
-        )
-
-        collapse_energy = (
-            alpha * collapse_energy
-            +
-            (1.0 - alpha) * quantum_energy
-        )
-
-    ####################################################
-    # Validator Guidance
-    ####################################################
-
-    if validator_energy is not None:
-
-        validator_energy = (
-            validator_energy
-            -
-            validator_energy.mean(
-                dim=1,
-                keepdim=True,
-            )
-        )
-
-        validator_energy = (
-            validator_energy
-            /
-            (
-                validator_energy.std(
-                    dim=1,
-                    keepdim=True,
-                )
-                + 1e-6
-            )
-        )
-
-        collapse_energy = (
-            collapse_energy
-            +
-            0.30 * validator_energy
-        )
-
-    ####################################################
-    # Collapse
-    ####################################################
-
-    collapse_out = self.collapse(
-        collapse_energy
-    )
-
-    collapse_probs = collapse_out[
-        "probabilities"
-    ]
-
-    ####################################################
-    # Final Energy
-    ####################################################
-
-    final_energy = (
-        answer_energy
-        *
-        collapse_probs.unsqueeze(-1)
-    ).sum(dim=1)
-
-    final_scores = -final_energy
-
-    ####################################################
-    # Return
-    ####################################################
-
-    return {
-
-        "scores": final_scores,
-
-        "answer_energy": answer_energy,
-
-        "collapse_energy": collapse_energy,
-
-        "collapse_probs": collapse_probs,
-
-        "selector_confidence": selector_confidence,
-
-        "quantum_energy": quantum_energy,
-
-        "collapse_loss": collapse_out["collapse_loss"],
-
-        "entropy": collapse_out["entropy"],
-
-        "diversity": collapse_out["diversity"],
-
-        "spread": collapse_out["spread"],
-
-        "peak": collapse_out["peak"],
-
-        "validator_potential": potential,
-
-        "trajectory": trajectory,
-
-        "attention": interaction,
-
-        "validator": validator_out,
-    }
+   
