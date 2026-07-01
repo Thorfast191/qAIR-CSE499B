@@ -169,19 +169,6 @@ class HypothesisValidator(nn.Module):
 
         energy = -energy
 
-        energy = energy - energy.mean(
-            dim=1,
-            keepdim=True,
-        )
-
-        energy = energy / (
-            energy.std(
-                dim=1,
-                keepdim=True,
-            )
-            + 1e-6
-        )
-
         temperature = (
             0.5
             + F.softplus(self.temperature)

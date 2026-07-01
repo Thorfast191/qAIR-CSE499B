@@ -101,10 +101,10 @@ class QAIRvNext(nn.Module):
 
         tau = 1.0
 
-        selector_energy = -tau * torch.logsumexp(
-            -answer_energy / tau,
+        selector_energy = torch.min(
+            answer_energy / tau,
             dim=-1,
-        )
+        ).values
 
         ####################################################
         # Collapse Energy
@@ -114,31 +114,11 @@ class QAIRvNext(nn.Module):
 
         if quantum_energy is not None:
 
-            quantum_energy = (
-                quantum_energy
-                - quantum_energy.mean(dim=1, keepdim=True)
-            )
-
-            quantum_energy = (
-                quantum_energy
-                /
-                (
-                    quantum_energy.std(
-                        dim=1,
-                        keepdim=True,
-                    )
-                    + 1e-6
-                )
-            )
-
-            alpha = torch.sigmoid(
-                self.energy_alpha
-            )
+            alpha = torch.sigmoid(self.energy_alpha)
 
             collapse_energy = (
                 alpha * collapse_energy
-                +
-                (1.0 - alpha) * quantum_energy
+                + (1.0 - alpha) * quantum_energy
             )
 
         ####################################################
@@ -147,30 +127,9 @@ class QAIRvNext(nn.Module):
 
         if validator_energy is not None:
 
-            validator_energy = (
-                validator_energy
-                - validator_energy.mean(
-                    dim=1,
-                    keepdim=True,
-                )
-            )
-
-            validator_energy = (
-                validator_energy
-                /
-                (
-                    validator_energy.std(
-                        dim=1,
-                        keepdim=True,
-                    )
-                    + 1e-6
-                )
-            )
-
             collapse_energy = (
                 collapse_energy
-                +
-                0.30 * validator_energy
+                + 0.30 * validator_energy
             )
 
         ####################################################

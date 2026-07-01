@@ -167,18 +167,18 @@ class EnergyAnswerSelector(nn.Module):
         # Stable normalization
         ##################################################
 
-        energy = energy - energy.mean(
-            dim=-1,
-            keepdim=True,
-        )
+        # energy = energy - energy.mean(
+        #     dim=-1,
+        #     keepdim=True,
+        # )
 
-        energy = energy / (
-            energy.std(
-                dim=-1,
-                keepdim=True,
-            )
-            + 1e-6
-        )
+        # energy = energy / (
+        #     energy.std(
+        #         dim=-1,
+        #         keepdim=True,
+        #     )
+        #     + 1e-6
+        # )
 
         ##################################################
         # Temperature
