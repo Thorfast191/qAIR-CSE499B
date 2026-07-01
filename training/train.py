@@ -106,6 +106,29 @@ class Trainer:
                     outputs = self.model(H, O, y)
                     loss = compute_loss(outputs, y)
 
+                # =====================================================
+                # DEBUG FIRST BATCH ONLY
+                # =====================================================
+                if epoch == 0 and total_loss == 0:
+
+                    print("\n========== DEBUG ==========")
+
+                    print("\nScores:")
+                    print(outputs["scores"][0])
+
+                    print("\nAnswer Energy:")
+                    print(outputs["answer_energy"][0])
+
+                    print("\nCollapse Probs:")
+                    print(outputs["collapse_probs"][0])
+
+                    print("\nCollapse Energy:")
+                    print(outputs["collapse_energy"][0])
+
+                    print("\nLoss:", loss.item())
+
+                    raise RuntimeError("Debug stop")
+
                 if outputs.get("validator") is not None and not printed_energy:
 
                     energy = outputs["validator_potential"]
