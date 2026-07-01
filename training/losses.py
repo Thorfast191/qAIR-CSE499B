@@ -30,13 +30,18 @@ def compute_loss(outputs, labels):
         margin - correct + scores
     )
 
-    ranking_loss.scatter_(
-        1,
-        labels.unsqueeze(1),
-        0,
+    mask = torch.ones_like(
+        ranking_loss,
+        dtype=torch.bool,
     )
 
-    ranking_loss = ranking_loss.mean()
+    mask.scatter_(
+        1,
+        labels.unsqueeze(1),
+        False,
+    )
+
+    ranking_loss = ranking_loss.masked_select(mask).mean()
 
     ########################################################
     # Collapse
