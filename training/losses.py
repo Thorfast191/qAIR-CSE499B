@@ -17,14 +17,40 @@ def compute_loss(outputs, labels):
     # Margin Energy Loss
     ########################################################
 
+    scores = outputs["scores"]
 
-    ranking_loss = torch.tensor(
-
-        0.0,
-
-        device=labels.device,
-
+    correct = scores.gather(
+        1,
+        labels.unsqueeze(1),
     )
+
+    margin = 1.0
+
+    ranking_loss = F.relu(
+        margin - correct + scores
+    )
+
+    # NOTE: do NOT scatter_ directly into ranking_loss here.
+    # ranking_loss is the *output of F.relu*, so an in-place
+    # write into it (e.g. ranking_loss.scatter_(...)) corrupts
+    # the tensor autograd needs for ReluBackward, causing:
+    # "RuntimeError: ... modified by an inplace operation ...
+    #  output 0 of ReluBackward0 ...".
+    # Instead, build a fresh boolean mask (no grad history) and
+    # use masked_select, which never mutates ranking_loss itself.
+
+    mask = torch.ones_like(
+        ranking_loss,
+        dtype=torch.bool,
+    )
+
+    mask.scatter_(
+        1,
+        labels.unsqueeze(1),
+        False,
+    )
+
+    ranking_loss = ranking_loss.masked_select(mask).mean()
 
     ########################################################
     # Collapse
@@ -114,6 +140,10 @@ def compute_loss(outputs, labels):
     total_loss = (
 
         1.0 * classification_loss
+
+        +
+
+        0.40 * ranking_loss
 
         +
 

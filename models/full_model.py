@@ -183,7 +183,7 @@ class QAIRvNext(nn.Module):
 
         collapse_probs = collapse_out[
             "probabilities"
-        ].detach()
+        ]
 
         ####################################################
         # Final Answer Energy
