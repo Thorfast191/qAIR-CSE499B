@@ -134,8 +134,10 @@ class HypothesisValidator(nn.Module):
         # Adaptive observable weights
         ####################################################
 
+        z_mean = z.mean(dim=2)
+
         gate = self.observable_gate(
-            z.mean(dim=2)
+            z_mean
         )
 
         weights = F.softmax(
@@ -217,7 +219,7 @@ class HypothesisValidator(nn.Module):
         ####################################################
 
         reliability = self.reliability(
-            z.mean(dim=2)
+            z_mean
         )
 
         reliability = reliability.squeeze(-1)
@@ -228,7 +230,7 @@ class HypothesisValidator(nn.Module):
 
         potential_input = torch.cat(
             [
-                z.mean(dim=2),
+                z_mean,
                 reliability.unsqueeze(-1),
             ],
             dim=-1,

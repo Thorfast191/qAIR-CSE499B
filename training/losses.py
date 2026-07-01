@@ -17,31 +17,14 @@ def compute_loss(outputs, labels):
     # Margin Energy Loss
     ########################################################
 
-    scores = outputs["scores"]
 
-    correct = scores.gather(
-        1,
-        labels.unsqueeze(1),
+    ranking_loss = torch.tensor(
+
+        0.0,
+
+        device=labels.device,
+
     )
-
-    margin = 1.0
-
-    ranking_loss = F.relu(
-        margin - correct + scores
-    )
-
-    mask = torch.ones_like(
-        ranking_loss,
-        dtype=torch.bool,
-    )
-
-    mask.scatter_(
-        1,
-        labels.unsqueeze(1),
-        False,
-    )
-
-    ranking_loss = ranking_loss.masked_select(mask).mean()
 
     ########################################################
     # Collapse
@@ -134,10 +117,6 @@ def compute_loss(outputs, labels):
 
         +
 
-        0.40 * ranking_loss
-
-        +
-
         0.10 * collapse_loss
 
         +
@@ -156,7 +135,7 @@ def compute_loss(outputs, labels):
 
         0.02 * diversity_loss
 
-    )
+)
 
     if torch.isnan(total_loss):
 
