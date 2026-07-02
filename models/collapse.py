@@ -37,12 +37,6 @@ class CollapseController(nn.Module):
         self.temperature = nn.Linear(32, 1)
 
         ####################################################
-        # Adaptive bias
-        ####################################################
-
-        self.bias = nn.Linear(32, 1)
-
-        ####################################################
         # Confidence
         ####################################################
 
@@ -61,18 +55,7 @@ class CollapseController(nn.Module):
         # Normalize
         ####################################################
 
-        energy = energy - energy.mean(
-            dim=1,
-            keepdim=True,
-        )
-
-        energy = energy / (
-            energy.std(
-                dim=1,
-                keepdim=True,
-            )
-            + 1e-6
-        )
+        energy = torch.tanh(energy)
 
         ####################################################
         # Encode energy distribution
@@ -89,14 +72,12 @@ class CollapseController(nn.Module):
         ####################################################
 
         temperature = (
-            0.5
+            2.5
             +
             F.softplus(
                 self.temperature(z_global)
             )
         )
-
-        bias = self.bias(z_global)
 
         confidence = self.confidence(z_global).squeeze(-1)
 
@@ -104,7 +85,7 @@ class CollapseController(nn.Module):
         # Stable Born Rule
         ####################################################
 
-        log_amp = -energy / temperature + bias
+        log_amp = -energy / (2.0 * temperature) 
 
         log_amp = log_amp - log_amp.max(
             dim=1,
@@ -113,13 +94,9 @@ class CollapseController(nn.Module):
 
         amplitude = torch.exp(log_amp)
 
-        amplitude = amplitude / (
-            amplitude.sum(
-                dim=1,
-                keepdim=True,
-            )
-            + 1e-8
-        )
+        amplitude = amplitude / torch.sqrt(
+                    (amplitude ** 2).sum(dim=1, keepdim=True) + 1e-8
+                )
 
         probabilities = amplitude.pow(2)
 
@@ -147,7 +124,7 @@ class CollapseController(nn.Module):
         # Adaptive collapse objective
         ####################################################
 
-        target_entropy = 1.0 - confidence
+        target_entropy = torch.full_like(entropy, 1.2)
 
         collapse_loss = (
 
@@ -162,6 +139,12 @@ class CollapseController(nn.Module):
             0.005 * spread.mean()
 
         )
+
+        if self.training and torch.rand(1).item() < 0.01:
+            print(f"Temp: {temperature.mean().item():.3f}")
+            print(f"Entropy: {entropy.mean().item():.3f}")
+            print(f"Peak: {peak.mean().item():.3f}")
+            print(f"Energy std: {raw_energy.std().item():.3f}")
 
         return {
 

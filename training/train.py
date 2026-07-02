@@ -127,8 +127,6 @@ class Trainer:
 
                     print("\nLoss:", loss.item())
 
-                    raise RuntimeError("Debug stop")
-
                 if outputs.get("validator") is not None and not printed_energy:
 
                     energy = outputs["validator_potential"]

@@ -19,9 +19,9 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 def run_training(
     cache_dir="./cache",
     ckpt_dir="./ckpt",
-    train_samples=5000,
-    val_samples=1000,
-    epochs=20,
+    train_samples=100,
+    val_samples=20,
+    epochs=50,
 ):
 
     print("=" * 60)
