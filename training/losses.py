@@ -14,7 +14,7 @@ def compute_loss(outputs, labels):
     )
 
     ########################################################
-    # Margin Energy Loss
+    # Margin Ranking Loss
     ########################################################
 
     scores = outputs["scores"]
@@ -30,15 +30,6 @@ def compute_loss(outputs, labels):
         margin - correct + scores
     )
 
-    # NOTE: do NOT scatter_ directly into ranking_loss here.
-    # ranking_loss is the *output of F.relu*, so an in-place
-    # write into it (e.g. ranking_loss.scatter_(...)) corrupts
-    # the tensor autograd needs for ReluBackward, causing:
-    # "RuntimeError: ... modified by an inplace operation ...
-    #  output 0 of ReluBackward0 ...".
-    # Instead, build a fresh boolean mask (no grad history) and
-    # use masked_select, which never mutates ranking_loss itself.
-
     mask = torch.ones_like(
         ranking_loss,
         dtype=torch.bool,
@@ -53,44 +44,10 @@ def compute_loss(outputs, labels):
     ranking_loss = ranking_loss.masked_select(mask).mean()
 
     ########################################################
-    # Collapse
+    # Collapse Loss
     ########################################################
 
     collapse_loss = outputs["collapse_loss"]
-
-    ########################################################
-    # Validator Potential
-    ########################################################
-
-    if outputs["validator_potential"] is not None:
-
-        potential_loss = outputs[
-            "validator_potential"
-        ].pow(2).mean()
-
-    else:
-
-        potential_loss = torch.tensor(
-            0.0,
-            device=labels.device,
-        )
-
-    ########################################################
-    # Quantum Energy
-    ########################################################
-
-    if outputs["quantum_energy"] is not None:
-
-        quantum_loss = outputs[
-            "quantum_energy"
-        ].pow(2).mean()
-
-    else:
-
-        quantum_loss = torch.tensor(
-            0.0,
-            device=labels.device,
-        )
 
     ########################################################
     # Validator BCE
@@ -104,37 +61,35 @@ def compute_loss(outputs, labels):
     validator = outputs.get("validator")
 
     if (
-
         validator is not None
-
         and
-
         validator.get("relevance_target") is not None
-
     ):
 
         validator_loss = F.binary_cross_entropy_with_logits(
-
             validator["relevance_logits"],
-
             validator["relevance_target"],
-
         )
 
     ########################################################
-    # Hypothesis Diversity
+    # Entropy Regularization
+    # Match CollapseController target entropy
     ########################################################
 
     probs = outputs["collapse_probs"]
 
-    diversity_loss = -(
-
+    entropy = -(
         probs * torch.log(probs + 1e-8)
-
     ).sum(dim=1).mean()
 
+    target_entropy = 1.2
+
+    entropy_loss = (
+        entropy - target_entropy
+    ).pow(2)
+
     ########################################################
-    # Total
+    # Total Loss
     ########################################################
 
     total_loss = (
@@ -155,20 +110,18 @@ def compute_loss(outputs, labels):
 
         +
 
-        0.05 * potential_loss
+        0.02 * entropy_loss
 
-        +
+    )
 
-        0.05 * quantum_loss
+    ########################################################
+    # NaN Guard
+    ########################################################
 
-        +
+    if not torch.isfinite(total_loss):
 
-        0.02 * diversity_loss
-
-)
-
-    if torch.isnan(total_loss):
-
-        raise RuntimeError("NaN detected in loss")
+        raise RuntimeError(
+            "Loss became NaN/Inf"
+        )
 
     return total_loss

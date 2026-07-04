@@ -31,11 +31,16 @@ class QAIRDataset(Dataset):
 
             print(f"[CACHE FOUND] {cache_path}")
 
-            self.samples = torch.load(cache_path, map_location="cpu")
+            loaded = torch.load(cache_path, map_location="cpu")
+
+            if isinstance(loaded, dict):
+                self.samples = loaded["samples"]
+            else:
+                self.samples = loaded
 
             self.samples = self.samples[:max_samples]
 
-            print(f"[CACHE LOADED] " f"{len(self.samples)} samples")
+            print(f"[CACHE LOADED] {len(self.samples)} samples")
 
             return
 
@@ -140,9 +145,9 @@ class QAIRDataset(Dataset):
 
                     "option_index": list(range(len(options))),
 
-                    "H": H,
+                    "H": H.cpu(),
 
-                    "O": O,
+                    "O": O.cpu(),
 
                     "y": y,
                 }
@@ -226,8 +231,9 @@ def collate_fn(batch):
         h_len = H.shape[0]
         o_len = O.shape[0]
 
-        H_mask = torch.zeros(max_h, dtype=torch.bool)
-        O_mask = torch.zeros(max_o, dtype=torch.bool)
+        H_mask = H.new_zeros(max_h, dtype=torch.bool)
+
+        O_mask = O.new_zeros(max_o, dtype=torch.bool)
 
         H_mask[:h_len] = True
         O_mask[:o_len] = True
@@ -238,7 +244,7 @@ def collate_fn(batch):
 
         if H.shape[0] < max_h:
 
-            pad = torch.zeros(
+            pad = H.new_zeros(
                 max_h - h_len,
                 dim,
             )
@@ -251,7 +257,7 @@ def collate_fn(batch):
 
         if O.shape[0] < max_o:
 
-            pad = torch.zeros(
+            pad = O.new_zeros(
                 max_o - o_len,
                 dim,
             )
