@@ -43,18 +43,18 @@ ABLATIONS = {
 def run_ablation_suite(
     cache_dir,
     ckpt_dir,
-    epochs=5,
+    epochs=20,
 ):
 
     train_ds = QAIRDataset(
         split="train",
-        max_samples=100,
+        max_samples=8000,
         cache_dir=cache_dir,
     )
 
     val_ds = QAIRDataset(
         split="validation",
-        max_samples=20,
+        max_samples=2000,
         cache_dir=cache_dir,
     )
 
