@@ -56,7 +56,10 @@ class QAIRvNext(nn.Module):
 
         if self.use_quantum:
 
-            q_state, quantum_energy = self.quantum(H)
+            from torch.amp import autocast
+
+            with autocast(device_type="cuda", enabled=False):
+                q_state, quantum_energy = self.quantum(H.float())
 
             H = H + q_state
 

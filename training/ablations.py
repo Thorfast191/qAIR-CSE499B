@@ -1,5 +1,6 @@
 import os
 import torch
+from functools import partial
 
 from torch.utils.data import DataLoader
 
@@ -62,14 +63,14 @@ def run_ablation_suite(
         train_ds,
         batch_size=8,
         shuffle=True,
-        collate_fn=collate_fn,
+        collate_fn=partial(collate_fn, shuffle_options=True),
     )
 
     val_loader = DataLoader(
         val_ds,
         batch_size=8,
         shuffle=False,
-        collate_fn=collate_fn,
+        collate_fn=partial(collate_fn, shuffle_options=False),
     )
 
     results = {}

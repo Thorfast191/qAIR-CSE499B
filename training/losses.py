@@ -82,7 +82,7 @@ def compute_loss(outputs, labels):
         probs * torch.log(probs + 1e-8)
     ).sum(dim=1).mean()
 
-    target_entropy = 1.2
+    target_entropy = 0.5
 
     entropy_loss = (
         entropy - target_entropy

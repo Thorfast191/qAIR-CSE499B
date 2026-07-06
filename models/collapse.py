@@ -72,7 +72,7 @@ class CollapseController(nn.Module):
         ####################################################
 
         temperature = (
-            2.5
+            0.3
             +
             F.softplus(
                 self.temperature(z_global)
@@ -124,7 +124,7 @@ class CollapseController(nn.Module):
         # Adaptive collapse objective
         ####################################################
 
-        target_entropy = torch.full_like(entropy, 1.2)
+        target_entropy = torch.full_like(entropy, 0.5)
 
         collapse_loss = (
 

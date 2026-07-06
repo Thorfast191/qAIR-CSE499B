@@ -79,9 +79,12 @@ Requirements
             if not line:
                 continue
 
-            # Remove bullets / numbering / A. B. 1)
+            # Remove bullets / numbering only (e.g. "1. ", "A) ", "- ")
+            # NOTE: previous version used [A-Za-z0-9...]+ which greedily
+            # eats real words at the start of the sentence, not just the
+            # bullet marker. Cap the marker to <=3 leading chars.
             line = re.sub(
-                r"^[A-Za-z0-9\.\)\:\-\•\*\s]+",
+                r"^[A-Za-z0-9]{0,3}[\.\)\:\-\•\*]\s*",
                 "",
                 line,
             )

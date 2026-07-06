@@ -209,7 +209,13 @@ class QAIRDataset(Dataset):
         return self.samples[idx]
 
 
-def collate_fn(batch):
+def collate_fn(batch, shuffle_options=True):
+    """
+    shuffle_options: randomly permutes each sample's option (and matching
+    hypothesis) order so the model can't learn positional shortcuts from
+    the small dataset. Pass shuffle_options=False for validation/eval so
+    metrics are stable and reproducible.
+    """
 
     max_h = max(x["H"].shape[0] for x in batch)
 
@@ -227,6 +233,22 @@ def collate_fn(batch):
 
         H = sample["H"]
         O = sample["O"]
+        y = sample["y"]
+
+        if shuffle_options:
+
+            n = O.shape[0]
+
+            perm = torch.randperm(n)
+
+            O = O[perm]
+
+            # H and O share index order (one hypothesis per option),
+            # so permute H the same way if they're aligned 1:1.
+            if H.shape[0] == n:
+                H = H[perm]
+
+            y = int((perm == y).nonzero(as_tuple=True)[0].item())
 
         h_len = H.shape[0]
         o_len = O.shape[0]
@@ -267,7 +289,7 @@ def collate_fn(batch):
         Hs.append(H)
         Os.append(O)
 
-        ys.append(sample["y"])
+        ys.append(y)
         H_masks.append(H_mask)
         O_masks.append(O_mask)
 
