@@ -15,7 +15,7 @@ DIM = 384
 
 class QAIRDataset(Dataset):
 
-    def __init__(self, split="train", max_samples=500, cache_dir="./cache"):
+    def __init__(self, split="train", max_samples=None, cache_dir="./cache"):
 
         self.samples = []
 
@@ -38,7 +38,8 @@ class QAIRDataset(Dataset):
             else:
                 self.samples = loaded
 
-            self.samples = self.samples[:max_samples]
+            if max_samples is not None:
+                self.samples = self.samples[:max_samples]
 
             print(f"[CACHE LOADED] {len(self.samples)} samples")
 
@@ -177,7 +178,7 @@ class QAIRDataset(Dataset):
 
                     print(f"[AUTOSAVE] " f"{count} samples")
 
-                if count >= max_samples:
+                if max_samples is not None and count >= max_samples:
                     break
 
             except Exception as e:

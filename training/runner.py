@@ -20,13 +20,13 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 def run_training(
     cache_dir="./cache",
     ckpt_dir="./ckpt",
-    train_samples=8000,
-    val_samples=2000,
+    train_samples=None,
+    val_samples=None,
     epochs=20,
 ):
 
     print("=" * 60)
-    print("qAIR-V32 TRAINING")
+    print("qAIR-V34 TRAINING")
     print("=" * 60)
 
     train_ds = QAIRDataset(
@@ -71,12 +71,12 @@ def run_training(
         val_loader=val_loader,
         device=device,
         ckpt_dir=ckpt_dir,
-        name="qair_v32",
+        name="qair_v34",
     )
 
     latest_ckpt = os.path.join(
         ckpt_dir,
-        "qair_v32_latest.pt",
+        "qair_v34_latest.pt",
     )
 
     start_epoch = 0

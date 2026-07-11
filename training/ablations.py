@@ -23,17 +23,17 @@ ABLATIONS = {
         "use_validator": False,
         "persistent_steps": 1,
     },
-    "A8_full_hybrid": {
+    "A2_validator": {
+        "use_quantum": False,
+        "use_validator": True,
+        "persistent_steps": 2,
+    },
+    "A3_persistent": {
         "use_quantum": True,
         "use_validator": True,
         "persistent_steps": 3,
     },
-    "A9_validator": {
-        "use_quantum": False,
-        "use_validator": True,
-        "persistent_steps": 3,
-    },
-    "A10_persistent": {
+    "A4_full_hybrid": {
         "use_quantum": True,
         "use_validator": True,
         "persistent_steps": 5,
@@ -49,13 +49,13 @@ def run_ablation_suite(
 
     train_ds = QAIRDataset(
         split="train",
-        max_samples=8000,
+        max_samples=None,
         cache_dir=cache_dir,
     )
 
     val_ds = QAIRDataset(
         split="validation",
-        max_samples=2000,
+        max_samples=None,
         cache_dir=cache_dir,
     )
 
