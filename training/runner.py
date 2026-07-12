@@ -62,7 +62,7 @@ def run_training(
         dim=DIM,
         use_quantum=True,
         use_validator=True,
-        persistent_steps=3,
+        persistent_steps=5,
     ).to(device)
 
     trainer = Trainer(
