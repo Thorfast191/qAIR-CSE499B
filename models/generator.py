@@ -3,7 +3,7 @@ import torch
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-LLM_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
+LLM_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 
 
 class HypothesisGenerator:
