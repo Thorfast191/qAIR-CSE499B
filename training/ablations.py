@@ -102,6 +102,7 @@ def run_ablation_suite(
         )
 
         start_epoch = 0
+        best_acc = 0.0
 
         print("\nCheckpoint Search:")
         print(latest_ckpt)
@@ -146,6 +147,8 @@ def run_ablation_suite(
 
                 trainer.scaler.load_state_dict(ckpt["scaler"])
 
+            best_acc = ckpt.get("best_acc", 0.0)
+
             start_epoch = ckpt["epoch"] + 1
 
             print(f"Resuming from epoch " f"{start_epoch}")
@@ -161,6 +164,7 @@ def run_ablation_suite(
         trainer.train(
             epochs=epochs,
             start_epoch=start_epoch,
+            best_acc=best_acc,
         )
 
         results[name] = cfg
