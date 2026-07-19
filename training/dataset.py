@@ -23,8 +23,10 @@ class QAIRDataset(Dataset):
 
         cache_path = os.path.join(cache_dir, f"arc_{split}.pt")
 
+        resume_raw_index = 0
+
         # ====================================================
-        # LOAD CACHE
+        # LOAD CACHE (possibly partial)
         # ====================================================
 
         if os.path.exists(cache_path):
@@ -34,22 +36,43 @@ class QAIRDataset(Dataset):
             loaded = torch.load(cache_path, map_location="cpu")
 
             if isinstance(loaded, dict):
-                self.samples = loaded["samples"]
+                self.samples = loaded.get("samples", [])
+                is_complete = loaded.get("complete", False)
+                resume_raw_index = loaded.get("raw_index", 0)
             else:
+                # Old-format cache (plain list). We have no way of knowing
+                # whether it was finished, so treat it as complete to avoid
+                # silently re-triggering a full rebuild of a cache someone
+                # already relied on. New caches will always carry the flag.
                 self.samples = loaded
+                is_complete = True
+                resume_raw_index = 0
+
+            print(f"[CACHE LOADED] {len(self.samples)} samples "
+                  f"(complete={is_complete})")
 
             if max_samples is not None:
+                # Caller explicitly wants a capped subset. If we already
+                # have enough, or more than enough, that's fine either way.
                 self.samples = self.samples[:max_samples]
+                print(f"[CACHE TRUNCATED TO max_samples] {len(self.samples)} samples")
+                return
 
-            print(f"[CACHE LOADED] {len(self.samples)} samples")
+            if is_complete:
+                return
 
-            return
+            print(
+                f"[CACHE INCOMPLETE] Resuming build from raw index "
+                f"{resume_raw_index} ({len(self.samples)} samples so far)..."
+            )
+
+        else:
+
+            print(f"[CACHE MISSING] Building {split} cache from scratch...")
 
         # ====================================================
-        # BUILD CACHE
+        # BUILD (or RESUME) CACHE
         # ====================================================
-
-        print(f"[CACHE MISSING] Building {split} cache...")
 
         start_time = time.time()
 
@@ -72,9 +95,16 @@ class QAIRDataset(Dataset):
 
         raw = ds[split]
 
-        count = 0
+        count = len(self.samples)
 
-        for ex in tqdm(raw, desc=f"Building {split} cache"):
+        last_raw_index = resume_raw_index
+
+        for raw_idx, ex in enumerate(
+            tqdm(raw, desc=f"Building {split} cache", initial=resume_raw_index)
+        ):
+
+            if raw_idx < resume_raw_index:
+                continue
 
             try:
 
@@ -109,11 +139,13 @@ class QAIRDataset(Dataset):
                 # ============================================
 
                 if len(options) < 2:
+                    last_raw_index = raw_idx + 1
                     continue
 
                 answer = ex["answerKey"]
 
                 if answer not in labels:
+                    last_raw_index = raw_idx + 1
                     continue
 
                 y = labels.index(answer)
@@ -157,8 +189,10 @@ class QAIRDataset(Dataset):
 
                 count += 1
 
+                last_raw_index = raw_idx + 1
+
                 # ============================================
-                # PERIODIC SAVE
+                # PERIODIC SAVE (marked incomplete)
                 # ============================================
 
                 if count % 50 == 0:
@@ -167,6 +201,10 @@ class QAIRDataset(Dataset):
 
                         "samples": self.samples,
 
+                        "raw_index": last_raw_index,
+
+                        "complete": False,
+
                         "encoder": "MiniLM-L6-v2",
 
                         "generator": "Qwen2.5",
@@ -174,9 +212,10 @@ class QAIRDataset(Dataset):
                         "version": 32,
                     }
 
-                    torch.save(cache, cache_path)                
+                    torch.save(cache, cache_path)
 
-                    print(f"[AUTOSAVE] " f"{count} samples")
+                    print(f"[AUTOSAVE] {count} samples "
+                          f"(raw_index={last_raw_index})")
 
                 if max_samples is not None and count >= max_samples:
                     break
@@ -185,21 +224,40 @@ class QAIRDataset(Dataset):
 
                 print(f"[SKIP] {e}")
 
+                last_raw_index = raw_idx + 1
+
                 continue
 
         # ====================================================
-        # FINAL SAVE
+        # FINAL SAVE (marked complete)
         # ====================================================
 
-        torch.save(self.samples, cache_path)
+        finished_full_split = (max_samples is None)
+
+        cache = {
+
+            "samples": self.samples,
+
+            "raw_index": last_raw_index,
+
+            "complete": finished_full_split,
+
+            "encoder": "MiniLM-L6-v2",
+
+            "generator": "Qwen2.5",
+
+            "version": 32,
+        }
+
+        torch.save(cache, cache_path)
 
         elapsed = (time.time() - start_time) / 60
 
-        print(f"[CACHE SAVED] " f"{cache_path}")
+        print(f"[CACHE SAVED] {cache_path} (complete={finished_full_split})")
 
-        print(f"[TOTAL SAMPLES] " f"{len(self.samples)}")
+        print(f"[TOTAL SAMPLES] {len(self.samples)}")
 
-        print(f"[BUILD TIME] " f"{elapsed:.2f} min")
+        print(f"[BUILD TIME] {elapsed:.2f} min")
 
     def __len__(self):
 
@@ -244,8 +302,6 @@ def collate_fn(batch, shuffle_options=True):
 
             O = O[perm]
 
-            # H and O share index order (one hypothesis per option),
-            # so permute H the same way if they're aligned 1:1.
             if H.shape[0] == n:
                 H = H[perm]
 
@@ -261,29 +317,15 @@ def collate_fn(batch, shuffle_options=True):
         H_mask[:h_len] = True
         O_mask[:o_len] = True
 
-        # ----------------------------------
-        # PAD HYPOTHESES
-        # ----------------------------------
-
         if H.shape[0] < max_h:
 
-            pad = H.new_zeros(
-                max_h - h_len,
-                dim,
-            )
+            pad = H.new_zeros(max_h - h_len, dim)
 
             H = torch.cat([H, pad], dim=0)
 
-        # ----------------------------------
-        # PAD OPTIONS
-        # ----------------------------------
-
         if O.shape[0] < max_o:
 
-            pad = O.new_zeros(
-                max_o - o_len,
-                dim,
-            )
+            pad = O.new_zeros(max_o - o_len, dim)
 
             O = torch.cat([O, pad], dim=0)
 
@@ -299,8 +341,5 @@ def collate_fn(batch, shuffle_options=True):
         "O": torch.stack(Os),
         "H_mask": torch.stack(H_masks),
         "O_mask": torch.stack(O_masks),
-        "y": torch.tensor(
-            ys,
-            dtype=torch.long,
-        ),
+        "y": torch.tensor(ys, dtype=torch.long),
     }
