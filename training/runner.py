@@ -119,8 +119,10 @@ def run_training(
         print(f"Resuming from epoch {start_epoch}")
 
     print(f"\nTraining from epoch " f"{start_epoch} to {epochs}")
-    trainer.train(
+    history = trainer.train(
         epochs=epochs,
         start_epoch=start_epoch,
         best_acc=best_acc,
+        patience=5,
     )
+    return history

@@ -68,7 +68,11 @@ class Trainer:
     # TRAIN
     # =====================================================
 
-    def train(self, epochs=5, start_epoch=0, best_acc=0.0):
+    def train(self, epochs=5, start_epoch=0, best_acc=0.0, patience=None):
+        """
+        patience: if set (e.g. 5), stop early after this many epochs with
+        no improvement in val acc. None disables early stopping (old behavior).
+        """
 
         if self.scheduler is None:
             self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -84,6 +88,8 @@ class Trainer:
             "collapse_peak": [],
         }
 
+        epochs_no_improve = 0
+
         for epoch in range(start_epoch, epochs):
 
             printed_energy = False
@@ -91,7 +97,10 @@ class Trainer:
 
             total_loss = 0.0
 
-            pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{epochs}")
+            pbar = tqdm(
+                self.train_loader,
+                desc=f"[{self.name}] Epoch {epoch+1}/{epochs}",
+            )
 
             for batch in pbar:
 
@@ -111,7 +120,7 @@ class Trainer:
                 # =====================================================
                 if epoch == 0 and total_loss == 0:
 
-                    print("\n========== DEBUG ==========")
+                    print(f"\n========== DEBUG [{self.name}] ==========")
 
                     print("\nScores:")
                     print(outputs["scores"][0])
@@ -132,13 +141,13 @@ class Trainer:
                     energy = outputs["validator_potential"]
 
                     print(
-                        f"\n[validator_potential] "
+                        f"\n[{self.name}][validator_potential] "
                         f"mean={energy.mean().item():.4f} "
                         f"max={energy.max().item():.4f} "
                         f"min={energy.min().item():.4f}"
                     )
                     print(
-                        f"[Collapse Peak] "
+                        f"[{self.name}][Collapse Peak] "
                         f"{outputs['collapse_probs'].max(dim=1)[0].mean().item():.4f}"
                     )
                     entropy = (
@@ -149,7 +158,7 @@ class Trainer:
                         .sum(dim=1)
                         .mean()
                     )
-                    print(f"[Collapse Entropy] " f"{entropy.item():.4f}")
+                    print(f"[{self.name}][Collapse Entropy] " f"{entropy.item():.4f}")
 
                     printed_energy = True
 
@@ -175,7 +184,7 @@ class Trainer:
             metrics = evaluate(self.model, self.val_loader, self.device)
 
             self.scheduler.step()
-            print(f"LR: {self.scheduler.get_last_lr()[0]:.6f}")
+            print(f"[{self.name}] LR: {self.scheduler.get_last_lr()[0]:.6f}")
 
             # ============================================
             # HISTORY
@@ -191,7 +200,7 @@ class Trainer:
             self.save_history(history)
 
             print("\n" + "=" * 60)
-            print(f"Epoch {epoch+1}/{epochs}")
+            print(f"[{self.name}] Epoch {epoch+1}/{epochs}")
             print(f"Train Loss : " f"{avg_loss:.4f}")
             print(f"Val Acc    : " f"{metrics['acc']:.4f}")
             print(f"Entropy    : " f"{metrics['entropy']:.4f}")
@@ -202,8 +211,23 @@ class Trainer:
             if metrics["acc"] > best_acc:
                 best_acc = metrics["acc"]
                 self.save_checkpoint(epoch, best_acc, best=True)
-                print(f"[BEST] " f"{best_acc:.4f}")
+                print(f"[{self.name}][BEST] " f"{best_acc:.4f}")
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
 
             self.save_checkpoint(epoch, best_acc, best=False)
 
-        print("\nTraining Complete.")
+            if patience is not None and epochs_no_improve >= patience:
+                print(
+                    f"\n[{self.name}][EARLY STOP] "
+                    f"No improvement for {patience} epochs. "
+                    f"Best acc = {best_acc:.4f}"
+                )
+                break
+
+        print(f"\n[{self.name}] Training Complete. Best acc = {best_acc:.4f}")
+
+        history["best_acc"] = best_acc
+
+        return history

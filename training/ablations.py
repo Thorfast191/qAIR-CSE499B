@@ -45,6 +45,7 @@ def run_ablation_suite(
     cache_dir,
     ckpt_dir,
     epochs=20,
+    patience=5,
 ):
 
     train_ds = QAIRDataset(
@@ -79,6 +80,7 @@ def run_ablation_suite(
 
         print("\n" + "=" * 60)
         print(f"Running {name}")
+        print(f"Config: {cfg}")
 
         model = QAIRvNext(
             dim=DIM,
@@ -108,6 +110,8 @@ def run_ablation_suite(
         print(latest_ckpt)
         print("Exists:", os.path.exists(latest_ckpt))
 
+        resumed_history = None
+
         if os.path.exists(latest_ckpt):
 
             print(f"\n[RESUME {name}]")
@@ -121,12 +125,6 @@ def run_ablation_suite(
 
             trainer.optim.load_state_dict(ckpt["optimizer"])
 
-            # -------------------------
-
-            # Restore scheduler
-
-            # -------------------------
-
             trainer.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 trainer.optim,
                 T_max=epochs,
@@ -134,17 +132,9 @@ def run_ablation_suite(
             )
 
             if ckpt.get("scheduler") is not None:
-
                 trainer.scheduler.load_state_dict(ckpt["scheduler"])
 
-            # -------------------------
-
-            # Restore AMP GradScaler
-
-            # -------------------------
-
             if ckpt.get("scaler") is not None:
-
                 trainer.scaler.load_state_dict(ckpt["scaler"])
 
             best_acc = ckpt.get("best_acc", 0.0)
@@ -153,22 +143,48 @@ def run_ablation_suite(
 
             print(f"Resuming from epoch " f"{start_epoch}")
 
+            # Recover history from disk if it exists, so results[name]
+            # isn't empty when a run is fully/partially resumed.
+            history_path = os.path.join(ckpt_dir, "history.pt")
+            if os.path.exists(history_path):
+                try:
+                    resumed_history = torch.load(history_path, map_location="cpu")
+                except Exception as e:
+                    print(f"[WARN] Could not load history.pt: {e}")
+
         if start_epoch >= epochs:
 
             print(f"[SKIP] {name} already " f"finished {epochs} epochs.")
 
-            results[name] = cfg
+            results[name] = {
+                "config": cfg,
+                "best_acc": best_acc,
+                "history": resumed_history,
+            }
 
             continue
 
-        trainer.train(
+        history = trainer.train(
             epochs=epochs,
             start_epoch=start_epoch,
             best_acc=best_acc,
+            patience=patience,
         )
 
-        results[name] = cfg
+        results[name] = {
+            "config": cfg,
+            "best_acc": history.get("best_acc", best_acc),
+            "final_val_acc": history["acc"][-1] if history["acc"] else None,
+            "history": history,
+        }
 
-    print("\nAblation Suite Complete.")
+    print("\n" + "=" * 60)
+    print("Ablation Suite Complete.")
+    print("=" * 60)
+    for name, r in results.items():
+        print(
+            f"{name:20s} best_acc={r['best_acc']:.4f}  "
+            f"final_val_acc={r.get('final_val_acc')}"
+        )
 
     return results
