@@ -20,7 +20,7 @@ from training.dataset import (
 
 from training.train import Trainer
 
-from models.full_model import QAIRvNext
+from models.full_model import QAIRvNextQuantum 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -72,7 +72,7 @@ def run_training(
     print(f"Train Samples : {len(train_ds)}")
     print(f"Val Samples   : {len(val_ds)}")
 
-    model = QAIRvNext(
+    model = QAIRvNextQuantum(
         dim=DIM,
         use_quantum=True,
         use_validator=True,
