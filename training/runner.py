@@ -34,7 +34,7 @@ def run_training(
 ):
 
     print("=" * 60)
-    print("qAIR-V38 TRAINING")
+    print("qAIR-V39 TRAINING")
     print("=" * 60)
 
     train_ds = QAIRDataset(
@@ -85,12 +85,12 @@ def run_training(
         val_loader=val_loader,
         device=device,
         ckpt_dir=ckpt_dir,
-        name="qair_v38",
+        name="qair_v39",
     )
 
     latest_ckpt = os.path.join(
         ckpt_dir,
-        "qair_v38_latest.pt",
+        "qair_v39_latest.pt",
     )
 
     start_epoch = 0
