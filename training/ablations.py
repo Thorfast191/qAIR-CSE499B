@@ -125,10 +125,6 @@ def run_ablation_suite(
 
         latest_ckpt = os.path.join(ckpt_dir, f"{name}_latest.pt")
 
-        # Warm-start only if this config has no checkpoint of its own yet
-        if not os.path.exists(latest_ckpt) and name in PARENT:
-            warm_start_from_parent(model, PARENT[name], ckpt_dir, device)
-
         wd = 2e-2 if (cfg["use_quantum"] or cfg["use_validator"]) else 1e-2
 
         trainer = Trainer(
