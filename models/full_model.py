@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 
 from models.validator import HypothesisValidator
-from models.quantum_layer_ENHANCED import QuantumEvolutionLayerEnhanced, ImprovedQuantumIntegration
+from models.quantum_layer import QuantumEvolutionLayerEnhanced, ImprovedQuantumIntegration
 from models.persistent_reasoner import PersistentReasoner
 from models.collapse import CollapseController
 from models.answer_selector import EnergyAnswerSelector
