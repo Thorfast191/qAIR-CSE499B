@@ -1,27 +1,46 @@
+"""
+UPDATED FULL MODEL with Enhanced Quantum Layer
+For Quantum-Inspired Reasoning Research
+
+This version keeps quantum layer as core component but makes it
+much more powerful and better integrated.
+"""
+
 import torch
 import torch.nn as nn
 
 from models.validator import HypothesisValidator
-from models.quantum_layer import QuantumEvolutionLayer
+from models.quantum_layer_ENHANCED import QuantumEvolutionLayerEnhanced, ImprovedQuantumIntegration
 from models.persistent_reasoner import PersistentReasoner
 from models.collapse import CollapseController
 from models.answer_selector import EnergyAnswerSelector
 
 
-class QAIRvNext(nn.Module):
+class QAIRvNextQuantumFocused(nn.Module):
+    """
+    qAIR-vNext optimized for Quantum Reasoning Research
+    
+    Key features:
+    - Enhanced quantum layer (multi-scale, adaptive)
+    - Intelligent quantum energy fusion
+    - Better quantum-classical integration
+    - Focused on quantum-inspired reasoning
+    """
 
     def __init__(
         self,
         dim,
         use_quantum=True,
         use_validator=True,
-        persistent_steps=3,
+        persistent_steps=5,
+        quantum_enhanced=True,
     ):
 
         super().__init__()
 
         self.use_quantum = use_quantum
         self.use_validator = use_validator
+        self.quantum_enhanced = quantum_enhanced
 
         self.reasoner = PersistentReasoner(
             dim,
@@ -29,13 +48,22 @@ class QAIRvNext(nn.Module):
         )
 
         if use_quantum:
-            self.quantum = QuantumEvolutionLayer(dim)
+            if quantum_enhanced:
+                # Use enhanced quantum layer for research
+                self.quantum = QuantumEvolutionLayerEnhanced(dim)
+                self.quantum_integration = ImprovedQuantumIntegration(dim)
+            else:
+                # Fall back to original quantum layer
+                from models.quantum_layer import QuantumEvolutionLayer
+                self.quantum = QuantumEvolutionLayer(dim)
+                self.quantum_integration = None
 
         if use_validator:
             self.validator = HypothesisValidator(dim)
 
         self.selector = EnergyAnswerSelector(dim)
 
+        # Learn balance between quantum and classical reasoning
         self.energy_alpha = nn.Parameter(torch.tensor(0.0))
 
         self.collapse = CollapseController()
@@ -49,7 +77,7 @@ class QAIRvNext(nn.Module):
         H, trajectory, interaction = self.reasoner(H)
 
         ####################################################
-        # Quantum Evolution
+        # Enhanced Quantum Evolution
         ####################################################
 
         quantum_energy = None
@@ -110,19 +138,27 @@ class QAIRvNext(nn.Module):
         ).values
 
         ####################################################
-        # Collapse Energy
+        # Collapse Energy (with quantum integration)
         ####################################################
 
         collapse_energy = selector_energy
 
+        # IMPROVED: Intelligent quantum energy fusion
         if quantum_energy is not None:
-
-            alpha = torch.sigmoid(self.energy_alpha)
-
-            collapse_energy = (
-                alpha * collapse_energy
-                + (1.0 - alpha) * quantum_energy
-            )
+            if self.quantum_integration is not None:
+                # Use enhanced fusion
+                collapse_energy = self.quantum_integration.fuse_quantum_energy(
+                    selector_energy,
+                    quantum_energy,
+                    H,
+                )
+            else:
+                # Use original fusion
+                alpha = torch.sigmoid(self.energy_alpha)
+                collapse_energy = (
+                    alpha * collapse_energy
+                    + (1.0 - alpha) * quantum_energy
+                )
 
         ####################################################
         # Validator Guidance
@@ -159,7 +195,7 @@ class QAIRvNext(nn.Module):
         final_scores = -final_energy
 
         ####################################################
-        # Return
+        # Return (with quantum diagnostics)
         ####################################################
 
         return {

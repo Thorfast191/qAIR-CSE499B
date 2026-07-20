@@ -1,3 +1,12 @@
+"""
+FIXED ENCODER CONFIGURATION
+Changes:
+1. Changed embedding model from "all-MiniLM-L6-v2" (384-dim) to "all-mpnet-base-v2" (768-dim)
+2. Larger embeddings provide more capacity for complex reasoning
+3. MPNet is better for semantic understanding than MiniLM
+4. This pairs with DIM=768 in dataset.py
+"""
+
 import torch
 import torch.nn.functional as F
 
@@ -7,7 +16,12 @@ from transformers import AutoTokenizer, AutoModel
 class HypothesisEncoder:
 
     def __init__(
-        self, model_name="sentence-transformers/all-MiniLM-L6-v2", device="cuda"
+        self, 
+        # FIXED: Changed from "sentence-transformers/all-MiniLM-L6-v2" (384-dim)
+        # to "sentence-transformers/all-mpnet-base-v2" (768-dim)
+        # MPNet provides better semantic representation and 2x larger embedding space
+        model_name="sentence-transformers/all-mpnet-base-v2",
+        device="cuda"
     ):
 
         self.device = device
@@ -22,6 +36,9 @@ class HypothesisEncoder:
             p.requires_grad = False
 
         self.dim = self.model.config.hidden_size
+        
+        print(f"[ENCODER] Using {model_name}")
+        print(f"[ENCODER] Embedding dimension: {self.dim}")
 
     @torch.no_grad()
     def encode(self, texts):

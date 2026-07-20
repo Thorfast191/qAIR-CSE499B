@@ -1,3 +1,12 @@
+"""
+FIXED LOSS FUNCTION
+- Removed redundant collapse_loss (already optimized in CollapseController)
+- Removed redundant entropy_loss (conflicts with collapse controller target)
+- Removed validator_loss (not properly supervised for multi-choice task)
+- Reduced ranking_loss weight and margin
+- Now: Simple, focused optimization on classification + gentle ranking
+"""
+
 import torch
 import torch.nn.functional as F
 
@@ -5,7 +14,7 @@ import torch.nn.functional as F
 def compute_loss(outputs, labels):
 
     ########################################################
-    # Classification
+    # PRIMARY OBJECTIVE: Classification
     ########################################################
 
     classification_loss = F.cross_entropy(
@@ -14,7 +23,9 @@ def compute_loss(outputs, labels):
     )
 
     ########################################################
-    # Margin Ranking Loss
+    # SECONDARY OBJECTIVE: Ranking Loss (gentle)
+    # Encourages correct answer to be higher than incorrect ones
+    # with a small margin, but doesn't dominate optimization
     ########################################################
 
     scores = outputs["scores"]
@@ -24,7 +35,7 @@ def compute_loss(outputs, labels):
         labels.unsqueeze(1),
     )
 
-    margin = 1.0
+    margin = 0.3  # REDUCED from 1.0 to reduce competition with classification_loss
 
     ranking_loss = F.relu(
         margin - correct + scores
@@ -44,74 +55,36 @@ def compute_loss(outputs, labels):
     ranking_loss = ranking_loss.masked_select(mask).mean()
 
     ########################################################
-    # Collapse Loss
+    # REMOVED: collapse_loss
+    # REASON: CollapseController already optimizes entropy
+    #         with its own loss function (collapse_loss).
+    #         Including it here creates double penalty and
+    #         conflicting gradients.
     ########################################################
 
-    collapse_loss = outputs["collapse_loss"]
-
     ########################################################
-    # Validator BCE
-    ########################################################
-
-    validator_loss = torch.tensor(
-        0.0,
-        device=labels.device,
-    )
-
-    validator = outputs.get("validator")
-
-    if (
-        validator is not None
-        and
-        validator.get("relevance_target") is not None
-    ):
-
-        validator_loss = F.binary_cross_entropy_with_logits(
-            validator["relevance_logits"],
-            validator["relevance_target"],
-        )
-
-    ########################################################
-    # Entropy Regularization
-    # Match CollapseController target entropy
+    # REMOVED: entropy_loss
+    # REASON: Both losses target entropy=0.5, creating
+    #         redundant objectives that prevent smooth
+    #         convergence.
     ########################################################
 
-    probs = outputs["collapse_probs"]
-
-    entropy = -(
-        probs * torch.log(probs + 1e-8)
-    ).sum(dim=1).mean()
-
-    target_entropy = 0.5
-
-    entropy_loss = (
-        entropy - target_entropy
-    ).pow(2)
+    ########################################################
+    # REMOVED: validator_loss
+    # REASON: Validator relevance target only set when
+    #         label is available. Binary BCE doesn't align
+    #         well with multi-choice task. Validator provides
+    #         too much noise without clear signal.
+    ########################################################
 
     ########################################################
-    # Total Loss
+    # TOTAL LOSS: Simple and focused
     ########################################################
 
     total_loss = (
-
         1.0 * classification_loss
-
         +
-
-        0.40 * ranking_loss
-
-        +
-
-        0.10 * collapse_loss
-
-        +
-
-        0.10 * validator_loss
-
-        +
-
-        0.02 * entropy_loss
-
+        0.08 * ranking_loss  # REDUCED weight from 0.40
     )
 
     ########################################################

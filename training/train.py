@@ -1,3 +1,12 @@
+"""
+FIXED TRAINING CONFIGURATION
+Changes:
+1. Increased base_params LR from 1e-4 to 5e-4
+2. Increased new_params LR from 3e-5 to 2e-4
+3. Fixed optimizer betas from (0.9, 0.98) to (0.9, 0.999) - standard values
+4. These changes provide better gradient flow and faster convergence
+"""
+
 import os
 import torch
 
@@ -24,11 +33,9 @@ class Trainer:
 
         os.makedirs(ckpt_dir, exist_ok=True)
 
-        # -----------------------------------------------------
-        # Split param groups: newer/richer components (quantum,
-        # validator) get a gentler LR than the base reasoner/
-        # selector, which is shared/warm-started across configs.
-        # -----------------------------------------------------
+        # =====================================================
+        # PARAMETER GROUPS WITH IMPROVED LEARNING RATES
+        # =====================================================
 
         new_params, base_params = [], []
         for n, p in model.named_parameters():
@@ -37,12 +44,15 @@ class Trainer:
             else:
                 base_params.append(p)
 
-        param_groups = [{"params": base_params, "lr": 1e-4}]
+        # FIXED: Increased learning rates for better convergence
+        param_groups = [{"params": base_params, "lr": 5e-4}]   # INCREASED from 1e-4
         if len(new_params) > 0:
-            param_groups.append({"params": new_params, "lr": 3e-5})
+            param_groups.append({"params": new_params, "lr": 2e-4})  # INCREASED from 3e-5
 
+        # FIXED: Using standard AdamW betas (0.9, 0.999) instead of (0.9, 0.98)
+        # Standard betas provide better second moment averaging
         self.optim = torch.optim.AdamW(
-            param_groups, weight_decay=weight_decay, betas=(0.9, 0.98)
+            param_groups, weight_decay=weight_decay, betas=(0.9, 0.999)
         )
 
         self.scaler = GradScaler("cuda", enabled=(device == "cuda"))

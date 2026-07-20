@@ -1,3 +1,11 @@
+"""
+FIXED RUNNER CONFIGURATION
+Changes:
+1. Increased batch_size from 8 to 32 for better gradient estimation
+2. Larger batch size provides more stable training and better utilization of GPU
+3. Larger batches give more accurate statistics for collapse dynamics
+"""
+
 import os
 import torch
 from functools import partial
@@ -41,16 +49,22 @@ def run_training(
         cache_dir=cache_dir,
     )
 
+    # FIXED: Increased batch_size from 8 to 32
+    # Larger batch size provides:
+    # - More stable gradient estimates
+    # - Better statistics for collapse dynamics
+    # - Better GPU utilization
+    # - Faster training
     train_loader = DataLoader(
         train_ds,
-        batch_size=8,
+        batch_size=32,  # INCREASED from 8
         shuffle=True,
         collate_fn=partial(collate_fn, shuffle_options=True),
     )
 
     val_loader = DataLoader(
         val_ds,
-        batch_size=8,
+        batch_size=32,  # INCREASED from 8
         shuffle=False,
         collate_fn=partial(collate_fn, shuffle_options=False),
     )
