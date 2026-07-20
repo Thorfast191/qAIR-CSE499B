@@ -16,7 +16,7 @@ from models.collapse import CollapseController
 from models.answer_selector import EnergyAnswerSelector
 
 
-class QAIRvNextQuantumFocused(nn.Module):
+class QAIRvNextQuantum(nn.Module):
     """
     qAIR-vNext optimized for Quantum Reasoning Research
     

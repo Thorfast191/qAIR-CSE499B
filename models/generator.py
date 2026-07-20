@@ -16,7 +16,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 LLM_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 
 
-class HypothesisGeneratorImproved:
+class HypothesisGenerator:
 
     def __init__(self, device="cuda"):
 
