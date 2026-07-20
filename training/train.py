@@ -10,7 +10,7 @@ from training.evaluate import evaluate
 
 class Trainer:
 
-    def __init__(self, model, train_loader, val_loader, device, ckpt_dir, name):
+    def __init__(self, model, train_loader, val_loader, device, ckpt_dir, name, weight_decay=1e-2):
 
         self.model = model
 
@@ -24,8 +24,25 @@ class Trainer:
 
         os.makedirs(ckpt_dir, exist_ok=True)
 
+        # -----------------------------------------------------
+        # Split param groups: newer/richer components (quantum,
+        # validator) get a gentler LR than the base reasoner/
+        # selector, which is shared/warm-started across configs.
+        # -----------------------------------------------------
+
+        new_params, base_params = [], []
+        for n, p in model.named_parameters():
+            if n.startswith("quantum.") or n.startswith("validator."):
+                new_params.append(p)
+            else:
+                base_params.append(p)
+
+        param_groups = [{"params": base_params, "lr": 1e-4}]
+        if len(new_params) > 0:
+            param_groups.append({"params": new_params, "lr": 3e-5})
+
         self.optim = torch.optim.AdamW(
-            model.parameters(), lr=1e-4, weight_decay=1e-2, betas=(0.9, 0.98)
+            param_groups, weight_decay=weight_decay, betas=(0.9, 0.98)
         )
 
         self.scaler = GradScaler("cuda", enabled=(device == "cuda"))
@@ -71,7 +88,7 @@ class Trainer:
     def train(self, epochs=5, start_epoch=0, best_acc=0.0, patience=None):
         """
         patience: if set (e.g. 5), stop early after this many epochs with
-        no improvement in val acc. None disables early stopping (old behavior).
+        no improvement in val acc. None disables early stopping.
         """
 
         if self.scheduler is None:
@@ -115,25 +132,17 @@ class Trainer:
                     outputs = self.model(H, O, y)
                     loss = compute_loss(outputs, y)
 
-                # =====================================================
-                # DEBUG FIRST BATCH ONLY
-                # =====================================================
                 if epoch == 0 and total_loss == 0:
 
                     print(f"\n========== DEBUG [{self.name}] ==========")
-
                     print("\nScores:")
                     print(outputs["scores"][0])
-
                     print("\nAnswer Energy:")
                     print(outputs["answer_energy"][0])
-
                     print("\nCollapse Probs:")
                     print(outputs["collapse_probs"][0])
-
                     print("\nCollapse Energy:")
                     print(outputs["collapse_energy"][0])
-
                     print("\nLoss:", loss.item())
 
                 if outputs.get("validator") is not None and not printed_energy:
@@ -163,20 +172,12 @@ class Trainer:
                     printed_energy = True
 
                 self.scaler.scale(loss).backward()
-
                 self.scaler.unscale_(self.optim)
-
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    2.0,
-                )
-
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 2.0)
                 self.scaler.step(self.optim)
-
                 self.scaler.update()
 
                 total_loss += loss.item()
-
                 pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
             avg_loss = total_loss / len(self.train_loader)
@@ -186,9 +187,13 @@ class Trainer:
             self.scheduler.step()
             print(f"[{self.name}] LR: {self.scheduler.get_last_lr()[0]:.6f}")
 
-            # ============================================
-            # HISTORY
-            # ============================================
+            # Log quantum/classical fusion balance, if applicable
+            if hasattr(self.model, "energy_alpha"):
+                alpha_val = torch.sigmoid(self.model.energy_alpha).item()
+                print(
+                    f"[{self.name}] energy_alpha={alpha_val:.4f} "
+                    f"(0=pure quantum, 1=pure classical)"
+                )
 
             history["loss"].append(avg_loss)
             history["acc"].append(metrics["acc"])
@@ -201,17 +206,17 @@ class Trainer:
 
             print("\n" + "=" * 60)
             print(f"[{self.name}] Epoch {epoch+1}/{epochs}")
-            print(f"Train Loss : " f"{avg_loss:.4f}")
-            print(f"Val Acc    : " f"{metrics['acc']:.4f}")
-            print(f"Entropy    : " f"{metrics['entropy']:.4f}")
-            print(f"Diversity  : " f"{metrics['diversity']:.4f}")
-            print(f"Spread     : " f"{metrics['spread']:.4f}")
-            print(f"Collapse Peak : " f"{metrics['collapse_peak']:.4f}")
+            print(f"Train Loss : {avg_loss:.4f}")
+            print(f"Val Acc    : {metrics['acc']:.4f}")
+            print(f"Entropy    : {metrics['entropy']:.4f}")
+            print(f"Diversity  : {metrics['diversity']:.4f}")
+            print(f"Spread     : {metrics['spread']:.4f}")
+            print(f"Collapse Peak : {metrics['collapse_peak']:.4f}")
 
             if metrics["acc"] > best_acc:
                 best_acc = metrics["acc"]
                 self.save_checkpoint(epoch, best_acc, best=True)
-                print(f"[{self.name}][BEST] " f"{best_acc:.4f}")
+                print(f"[{self.name}][BEST] {best_acc:.4f}")
                 epochs_no_improve = 0
             else:
                 epochs_no_improve += 1

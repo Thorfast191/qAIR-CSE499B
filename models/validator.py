@@ -70,6 +70,7 @@ class HypothesisValidator(nn.Module):
         self.potential = nn.Sequential(
             nn.Linear(dim + 1, dim),
             nn.GELU(),
+            nn.Dropout(0.10),
             nn.Linear(dim, dim),
         )
 

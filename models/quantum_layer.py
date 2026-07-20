@@ -110,6 +110,7 @@ class QuantumEvolutionLayer(nn.Module):
             ),
             nn.GELU(),
             nn.LayerNorm(dim),
+            nn.Dropout(0.10),
         )
 
         ####################################################
@@ -136,6 +137,7 @@ class QuantumEvolutionLayer(nn.Module):
         self.correction = nn.Sequential(
             nn.Linear(dim, dim),
             nn.GELU(),
+            nn.Dropout(0.10),
             nn.Linear(dim, dim),
         )
 

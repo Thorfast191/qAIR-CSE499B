@@ -40,6 +40,40 @@ ABLATIONS = {
     },
 }
 
+# Warm-start chain: each config loads compatible weights from its parent's
+# best checkpoint, IF this is a fresh run (no checkpoint yet for itself).
+PARENT = {
+    "A2_validator": "A1_baseline",
+    "A3_persistent": "A2_validator",
+    "A4_full_hybrid": "A3_persistent",
+}
+
+
+def warm_start_from_parent(model, parent_name, ckpt_dir, device):
+
+    parent_ckpt_path = os.path.join(ckpt_dir, f"{parent_name}_best.pt")
+
+    if not os.path.exists(parent_ckpt_path):
+        print(f"[WARM-START] No parent checkpoint at {parent_ckpt_path}, skipping.")
+        return
+
+    parent_ckpt = torch.load(parent_ckpt_path, map_location=device)
+    parent_state = parent_ckpt["model"]
+
+    model_state = model.state_dict()
+    compatible = {
+        k: v for k, v in parent_state.items()
+        if k in model_state and model_state[k].shape == v.shape
+    }
+    model_state.update(compatible)
+    model.load_state_dict(model_state)
+
+    print(
+        f"[WARM-START] {model.__class__.__name__} loaded "
+        f"{len(compatible)}/{len(model_state)} params from "
+        f"{parent_name} (best_acc={parent_ckpt.get('best_acc', '?')})"
+    )
+
 
 def run_ablation_suite(
     cache_dir,
@@ -89,6 +123,14 @@ def run_ablation_suite(
             persistent_steps=cfg["persistent_steps"],
         ).to(device)
 
+        latest_ckpt = os.path.join(ckpt_dir, f"{name}_latest.pt")
+
+        # Warm-start only if this config has no checkpoint of its own yet
+        if not os.path.exists(latest_ckpt) and name in PARENT:
+            warm_start_from_parent(model, PARENT[name], ckpt_dir, device)
+
+        wd = 2e-2 if (cfg["use_quantum"] or cfg["use_validator"]) else 1e-2
+
         trainer = Trainer(
             model=model,
             train_loader=train_loader,
@@ -96,11 +138,7 @@ def run_ablation_suite(
             device=device,
             ckpt_dir=ckpt_dir,
             name=name,
-        )
-
-        latest_ckpt = os.path.join(
-            ckpt_dir,
-            f"{name}_latest.pt",
+            weight_decay=wd,
         )
 
         start_epoch = 0
@@ -116,19 +154,13 @@ def run_ablation_suite(
 
             print(f"\n[RESUME {name}]")
 
-            ckpt = torch.load(
-                latest_ckpt,
-                map_location=device,
-            )
+            ckpt = torch.load(latest_ckpt, map_location=device)
 
             model.load_state_dict(ckpt["model"])
-
             trainer.optim.load_state_dict(ckpt["optimizer"])
 
             trainer.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                trainer.optim,
-                T_max=epochs,
-                eta_min=1e-6,
+                trainer.optim, T_max=epochs, eta_min=1e-6,
             )
 
             if ckpt.get("scheduler") is not None:
@@ -138,13 +170,10 @@ def run_ablation_suite(
                 trainer.scaler.load_state_dict(ckpt["scaler"])
 
             best_acc = ckpt.get("best_acc", 0.0)
-
             start_epoch = ckpt["epoch"] + 1
 
-            print(f"Resuming from epoch " f"{start_epoch}")
+            print(f"Resuming from epoch {start_epoch}")
 
-            # Recover history from disk if it exists, so results[name]
-            # isn't empty when a run is fully/partially resumed.
             history_path = os.path.join(ckpt_dir, "history.pt")
             if os.path.exists(history_path):
                 try:
@@ -154,7 +183,7 @@ def run_ablation_suite(
 
         if start_epoch >= epochs:
 
-            print(f"[SKIP] {name} already " f"finished {epochs} epochs.")
+            print(f"[SKIP] {name} already finished {epochs} epochs.")
 
             results[name] = {
                 "config": cfg,
