@@ -28,7 +28,7 @@ def run_training(
 ):
 
     print("=" * 60)
-    print("qAIR-V38 TRAINING")
+    print("qAIR-V40 TRAINING")
     print("=" * 60)
 
     train_ds = QAIRDataset(split="train", max_samples=train_samples, cache_dir=cache_dir)
@@ -66,11 +66,11 @@ def run_training(
         val_loader=val_loader,
         device=device,
         ckpt_dir=ckpt_dir,
-        name="qair_v38",
+        name="qair_v40",
         weight_decay=2e-2,
     )
 
-    latest_ckpt = os.path.join(ckpt_dir, "qair_v38_latest.pt")
+    latest_ckpt = os.path.join(ckpt_dir, "qair_v40_latest.pt")
 
     start_epoch = 0
     best_acc = 0.0
@@ -113,7 +113,7 @@ def run_training(
 
     # Save the config alongside so inference can't silently load with
     # mismatched persistent_steps / n_qubits ever again.
-    config_path = os.path.join(ckpt_dir, "qair_v38_config.pt")
+    config_path = os.path.join(ckpt_dir, "qair_v40_config.pt")
     torch.save(
         {
             "use_quantum": True,
