@@ -10,9 +10,9 @@ from training.dataset import (
     DIM,
 )
 
-from training.train import Trainer
+from training.train import Trainer 
 
-from models.full_model import QAIRvNext
+from models.full_model import QAIRvNextQuantum
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -116,7 +116,7 @@ def run_ablation_suite(
         print(f"Running {name}")
         print(f"Config: {cfg}")
 
-        model = QAIRvNext(
+        model = QAIRvNextQuantum(
             dim=DIM,
             use_quantum=cfg["use_quantum"],
             use_validator=cfg["use_validator"],
