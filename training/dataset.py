@@ -1,11 +1,3 @@
-"""
-FIXED DATASET CONFIGURATION
-Changes:
-1. Increased DIM from 384 to 768 for larger embedding capacity
-2. This allows better representation of complex scientific reasoning
-3. Pairs with encoder.py fix that uses larger embedding model
-"""
-
 import os
 import time
 import torch
@@ -18,8 +10,7 @@ from benchmarks.arc import load_arc
 from models.generator import HypothesisGenerator
 from models.encoder import HypothesisEncoder
 
-# FIXED: Increased from 384 to 768 for better representation capacity
-DIM = 768
+DIM = 384
 
 
 class QAIRDataset(Dataset):
@@ -214,7 +205,7 @@ class QAIRDataset(Dataset):
 
                         "complete": False,
 
-                        "encoder": "all-mpnet-base-v2",  # UPDATED: now using larger encoder
+                        "encoder": "MiniLM-L6-v2",
 
                         "generator": "Qwen2.5",
 
@@ -251,7 +242,7 @@ class QAIRDataset(Dataset):
 
             "complete": finished_full_split,
 
-            "encoder": "all-mpnet-base-v2",  # UPDATED: now using larger encoder
+            "encoder": "MiniLM-L6-v2",
 
             "generator": "Qwen2.5",
 
