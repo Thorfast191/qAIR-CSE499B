@@ -10,7 +10,7 @@ from benchmarks.arc import load_arc
 from models.generator import HypothesisGenerator
 from models.encoder import HypothesisEncoder
 
-DIM = 384
+DIM = 768
 
 
 class QAIRDataset(Dataset):
