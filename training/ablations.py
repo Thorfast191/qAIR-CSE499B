@@ -10,23 +10,34 @@ from training.dataset import (
     DIM,
 )
 
-from training.train import Trainer 
+from training.train import Trainer
 
-from models.full_model import QAIRvNextQuantum
+from models.full_model import QAIRvNext
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
+# Deconfounded grid: each row changes exactly one variable relative to
+# its nearest neighbor, so effects can actually be isolated.
+#
+#   A1  -> A1b : isolates quantum (steps fixed at 3, validator off)
+#   A2  -> A3  : isolates quantum (steps fixed at 3, validator on)
+#   A3  -> A4  : isolates persistent_steps (3 -> 5, quantum+validator on)
 ABLATIONS = {
     "A1_baseline": {
         "use_quantum": False,
         "use_validator": False,
-        "persistent_steps": 1,
+        "persistent_steps": 3,
+    },
+    "A1b_quantum_only": {
+        "use_quantum": True,
+        "use_validator": False,
+        "persistent_steps": 3,
     },
     "A2_validator": {
         "use_quantum": False,
         "use_validator": True,
-        "persistent_steps": 2,
+        "persistent_steps": 3,
     },
     "A3_persistent": {
         "use_quantum": True,
@@ -40,59 +51,18 @@ ABLATIONS = {
     },
 }
 
-# Warm-start chain: each config loads compatible weights from its parent's
-# best checkpoint, IF this is a fresh run (no checkpoint yet for itself).
-PARENT = {
-    "A2_validator": "A1_baseline",
-    "A3_persistent": "A2_validator",
-    "A4_full_hybrid": "A3_persistent",
-}
-
-
-def warm_start_from_parent(model, parent_name, ckpt_dir, device):
-
-    parent_ckpt_path = os.path.join(ckpt_dir, f"{parent_name}_best.pt")
-
-    if not os.path.exists(parent_ckpt_path):
-        print(f"[WARM-START] No parent checkpoint at {parent_ckpt_path}, skipping.")
-        return
-
-    parent_ckpt = torch.load(parent_ckpt_path, map_location=device)
-    parent_state = parent_ckpt["model"]
-
-    model_state = model.state_dict()
-    compatible = {
-        k: v for k, v in parent_state.items()
-        if k in model_state and model_state[k].shape == v.shape
-    }
-    model_state.update(compatible)
-    model.load_state_dict(model_state)
-
-    print(
-        f"[WARM-START] {model.__class__.__name__} loaded "
-        f"{len(compatible)}/{len(model_state)} params from "
-        f"{parent_name} (best_acc={parent_ckpt.get('best_acc', '?')})"
-    )
-
 
 def run_ablation_suite(
     cache_dir,
     ckpt_dir,
     epochs=20,
     patience=5,
+    n_qubits=12,
 ):
 
-    train_ds = QAIRDataset(
-        split="train",
-        max_samples=None,
-        cache_dir=cache_dir,
-    )
+    train_ds = QAIRDataset(split="train", max_samples=None, cache_dir=cache_dir)
 
-    val_ds = QAIRDataset(
-        split="validation",
-        max_samples=None,
-        cache_dir=cache_dir,
-    )
+    val_ds = QAIRDataset(split="validation", max_samples=None, cache_dir=cache_dir)
 
     train_loader = DataLoader(
         train_ds,
@@ -116,14 +86,19 @@ def run_ablation_suite(
         print(f"Running {name}")
         print(f"Config: {cfg}")
 
-        model = QAIRvNextQuantum(
+        model = QAIRvNext(
             dim=DIM,
             use_quantum=cfg["use_quantum"],
             use_validator=cfg["use_validator"],
             persistent_steps=cfg["persistent_steps"],
+            n_qubits=n_qubits,
         ).to(device)
 
-        latest_ckpt = os.path.join(ckpt_dir, f"{name}_latest.pt")
+        # NOTE: warm-starting from a "parent" ablation's converged weights
+        # was tried and reverted -- it saturated EnergyAnswerSelector's
+        # +/-6 clamp immediately on the next config, killing gradient flow
+        # through the newly-added component. Every config trains from a
+        # fresh random init.
 
         wd = 2e-2 if (cfg["use_quantum"] or cfg["use_validator"]) else 1e-2
 
@@ -136,6 +111,8 @@ def run_ablation_suite(
             name=name,
             weight_decay=wd,
         )
+
+        latest_ckpt = os.path.join(ckpt_dir, f"{name}_latest.pt")
 
         start_epoch = 0
         best_acc = 0.0

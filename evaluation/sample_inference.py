@@ -2,6 +2,7 @@ import torch
 
 from models.generator import HypothesisGenerator
 from models.encoder import HypothesisEncoder
+from models.full_model import QAIRvNext
 
 TEST_SAMPLES = [
     {
@@ -101,13 +102,40 @@ TEST_SAMPLES = [
     },
 ]
 
+def load_ablation_model(ckpt_dir, name, cfg, device, n_qubits=12):
+    """
+    Loads a specific named ablation checkpoint (e.g. "A4_full_hybrid")
+    with the EXACT config it was trained with, so persistent_steps /
+    use_quantum / use_validator can never silently mismatch.
+    """
+
+    model = QAIRvNext(
+        dim=384,
+        use_quantum=cfg["use_quantum"],
+        use_validator=cfg["use_validator"],
+        persistent_steps=cfg["persistent_steps"],
+        n_qubits=n_qubits,
+    )
+
+    ckpt_path = os.path.join(ckpt_dir, f"{name}_best.pt")
+
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+
+    model.load_state_dict(ckpt["model"])
+
+    model = model.to(device)
+    model.eval()
+
+    print(f"[LOADED] {name} from {ckpt_path} (best_acc={ckpt.get('best_acc', '?')})")
+
+    return model
+
 
 def run_sample_evaluation(model, device):
 
     model.eval()
 
     generator = HypothesisGenerator(device=device)
-
     encoder = HypothesisEncoder(device=device)
 
     correct = 0
@@ -125,11 +153,9 @@ def run_sample_evaluation(model, device):
         hypotheses = generator.generate(question, options)
 
         H = encoder.encode(hypotheses).unsqueeze(0)
-
         O = encoder.encode(options).unsqueeze(0)
 
         with torch.no_grad():
-
             outputs = model(H.to(device), O.to(device))
 
         pred = outputs["scores"].argmax(dim=-1).item()
@@ -144,31 +170,22 @@ def run_sample_evaluation(model, device):
         print("\n" + "-" * 70)
         print(f"Sample {idx+1}")
         print("-" * 70)
-
         print(f"Question:\n{question}\n")
-
         print("Options:")
-
         for i, op in enumerate(options):
             print(f"{i}. {op}")
-
         print("\nHypotheses:")
-
         for i, h in enumerate(hypotheses):
             print(f"{i+1}. {h}")
-
         print()
         print("Collapse Probabilities:")
         print(collapse)
-
         print()
         print("Prediction:")
         print(options[pred])
-
         print()
         print("Ground Truth:")
         print(options[answer])
-
         print()
         print("Correct:")
         print("YES" if is_correct else "NO")
