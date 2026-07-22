@@ -78,11 +78,11 @@ def run_training(
         val_loader=val_loader,
         device=device,
         ckpt_dir=ckpt_dir,
-        name="qair_v40",
+        name="qair_v41",
         weight_decay=WEIGHT_DECAY,
     )
 
-    start_epoch, best_acc, _ = load_or_resume(trainer, ckpt_dir, "qair_v40", epochs)
+    start_epoch, best_acc, _ = load_or_resume(trainer, ckpt_dir, "qair_v41", epochs)
 
     print(f"\nTraining from epoch {start_epoch} to {epochs}")
 
@@ -95,7 +95,7 @@ def run_training(
 
     # Save the config alongside so inference can't silently load with
     # mismatched persistent_steps / n_qubits ever again.
-    config_path = os.path.join(ckpt_dir, "qair_v40_config.pt")
+    config_path = os.path.join(ckpt_dir, "qair_v41_config.pt")
     torch.save(
         {
             "use_quantum": True,
