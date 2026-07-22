@@ -1,6 +1,7 @@
 import os
 import torch
 
+from config import EMBEDDING_DIM
 from models.generator import HypothesisGenerator
 from models.encoder import HypothesisEncoder
 from models.full_model import QAIRvNext
@@ -111,7 +112,7 @@ def load_ablation_model(ckpt_dir, name, cfg, device, n_qubits=12):
     """
 
     model = QAIRvNext(
-        dim=384,
+        dim=EMBEDDING_DIM,
         use_quantum=cfg["use_quantum"],
         use_validator=cfg["use_validator"],
         persistent_steps=cfg["persistent_steps"],

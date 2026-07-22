@@ -13,13 +13,15 @@ import torch
 from tqdm.auto import tqdm
 from torch.amp import autocast, GradScaler
 
+from config import BASE_LR, NEW_LR, WEIGHT_DECAY
+
 from training.losses import compute_loss
 from training.evaluate import evaluate
 
 
 class Trainer:
 
-    def __init__(self, model, train_loader, val_loader, device, ckpt_dir, name, weight_decay=1e-2):
+    def __init__(self, model, train_loader, val_loader, device, ckpt_dir, name, weight_decay=WEIGHT_DECAY):
 
         self.model = model
 
@@ -44,10 +46,9 @@ class Trainer:
             else:
                 base_params.append(p)
 
-        # FIXED: Increased learning rates for better convergence
-        param_groups = [{"params": base_params, "lr": 5e-4}]   # INCREASED from 1e-4
+        param_groups = [{"params": base_params, "lr": BASE_LR}]
         if len(new_params) > 0:
-            param_groups.append({"params": new_params, "lr": 2e-4})  # INCREASED from 3e-5
+            param_groups.append({"params": new_params, "lr": NEW_LR})
 
         # FIXED: Using standard AdamW betas (0.9, 0.999) instead of (0.9, 0.98)
         # Standard betas provide better second moment averaging
@@ -198,8 +199,8 @@ class Trainer:
             print(f"[{self.name}] LR: {self.scheduler.get_last_lr()[0]:.6f}")
 
             # Log quantum/classical fusion balance, if applicable
-            if hasattr(self.model, "energy_alpha"):
-                alpha_val = torch.sigmoid(self.model.energy_alpha).item()
+            if hasattr(self.model, "fusion"):
+                alpha_val = torch.sigmoid(self.model.fusion.energy_alpha).item()
                 print(
                     f"[{self.name}] energy_alpha={alpha_val:.4f} "
                     f"(0=pure quantum, 1=pure classical)"

@@ -1,8 +1,17 @@
-import os
 import torch
 from functools import partial
 
 from torch.utils.data import DataLoader
+
+from config import (
+    CACHE_DIR,
+    CKPT_DIR,
+    EPOCHS,
+    PATIENCE,
+    N_QUBITS,
+    BATCH_SIZE,
+    WEIGHT_DECAY,
+)
 
 from training.dataset import (
     QAIRDataset,
@@ -11,6 +20,7 @@ from training.dataset import (
 )
 
 from training.train import Trainer
+from training.checkpoint import load_or_resume
 
 from models.full_model import QAIRvNext
 
@@ -53,11 +63,11 @@ ABLATIONS = {
 
 
 def run_ablation_suite(
-    cache_dir,
-    ckpt_dir,
-    epochs=20,
-    patience=5,
-    n_qubits=12,
+    cache_dir=CACHE_DIR,
+    ckpt_dir=CKPT_DIR,
+    epochs=EPOCHS,
+    patience=PATIENCE,
+    n_qubits=N_QUBITS,
 ):
 
     train_ds = QAIRDataset(split="train", max_samples=None, cache_dir=cache_dir)
@@ -66,14 +76,14 @@ def run_ablation_suite(
 
     train_loader = DataLoader(
         train_ds,
-        batch_size=8,
+        batch_size=BATCH_SIZE,
         shuffle=True,
         collate_fn=partial(collate_fn, shuffle_options=True),
     )
 
     val_loader = DataLoader(
         val_ds,
-        batch_size=8,
+        batch_size=BATCH_SIZE,
         shuffle=False,
         collate_fn=partial(collate_fn, shuffle_options=False),
     )
@@ -100,7 +110,7 @@ def run_ablation_suite(
         # through the newly-added component. Every config trains from a
         # fresh random init.
 
-        wd = 2e-2 if (cfg["use_quantum"] or cfg["use_validator"]) else 1e-2
+        wd = WEIGHT_DECAY if (cfg["use_quantum"] or cfg["use_validator"]) else 1e-2
 
         trainer = Trainer(
             model=model,
@@ -112,47 +122,9 @@ def run_ablation_suite(
             weight_decay=wd,
         )
 
-        latest_ckpt = os.path.join(ckpt_dir, f"{name}_latest.pt")
-
-        start_epoch = 0
-        best_acc = 0.0
-
-        print("\nCheckpoint Search:")
-        print(latest_ckpt)
-        print("Exists:", os.path.exists(latest_ckpt))
-
-        resumed_history = None
-
-        if os.path.exists(latest_ckpt):
-
-            print(f"\n[RESUME {name}]")
-
-            ckpt = torch.load(latest_ckpt, map_location=device)
-
-            model.load_state_dict(ckpt["model"])
-            trainer.optim.load_state_dict(ckpt["optimizer"])
-
-            trainer.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                trainer.optim, T_max=epochs, eta_min=1e-6,
-            )
-
-            if ckpt.get("scheduler") is not None:
-                trainer.scheduler.load_state_dict(ckpt["scheduler"])
-
-            if ckpt.get("scaler") is not None:
-                trainer.scaler.load_state_dict(ckpt["scaler"])
-
-            best_acc = ckpt.get("best_acc", 0.0)
-            start_epoch = ckpt["epoch"] + 1
-
-            print(f"Resuming from epoch {start_epoch}")
-
-            history_path = os.path.join(ckpt_dir, "history.pt")
-            if os.path.exists(history_path):
-                try:
-                    resumed_history = torch.load(history_path, map_location="cpu")
-                except Exception as e:
-                    print(f"[WARN] Could not load history.pt: {e}")
+        start_epoch, best_acc, resumed_history = load_or_resume(
+            trainer, ckpt_dir, name, epochs
+        )
 
         if start_epoch >= epochs:
 

@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 
 from models.validator import HypothesisValidator
@@ -6,6 +5,7 @@ from models.quantum_layer import QuantumEvolutionLayer
 from models.persistent_reasoner import PersistentReasoner
 from models.collapse import CollapseController
 from models.answer_selector import EnergyAnswerSelector
+from models.energy_fusion import EnergyFusion
 
 
 class QAIRvNext(nn.Module):
@@ -35,13 +35,7 @@ class QAIRvNext(nn.Module):
 
         self.selector = EnergyAnswerSelector(dim)
 
-        self.energy_alpha = nn.Parameter(torch.tensor(0.0))
-
-        # Learnable validator guidance weight (was hardcoded 0.30).
-        # sigmoid(0.0) = 0.5 at init -- moderate influence, model can
-        # learn to trust it more or suppress it based on whether the
-        # validator's signal actually helps.
-        self.validator_alpha = nn.Parameter(torch.tensor(0.0))
+        self.fusion = EnergyFusion()
 
         self.collapse = CollapseController()
 
@@ -78,23 +72,11 @@ class QAIRvNext(nn.Module):
 
         selector_confidence = selector["confidence"]
 
-        tau = 1.0
-
-        selector_energy = torch.min(answer_energy / tau, dim=-1).values
-
-        collapse_energy = selector_energy
-
-        if quantum_energy is not None:
-
-            alpha = torch.sigmoid(self.energy_alpha)
-
-            collapse_energy = alpha * collapse_energy + (1.0 - alpha) * quantum_energy
-
-        if validator_energy is not None:
-
-            v_weight = torch.sigmoid(self.validator_alpha)
-
-            collapse_energy = collapse_energy + v_weight * validator_energy
+        collapse_energy = self.fusion(
+            answer_energy,
+            quantum_energy=quantum_energy,
+            validator_energy=validator_energy,
+        )
 
         collapse_out = self.collapse(collapse_energy)
 

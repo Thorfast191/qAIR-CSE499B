@@ -22,7 +22,7 @@ class QuantumEvolutionLayer(nn.Module):
             nn.Linear(dim, n_qubits),
         )
 
-        dev = qml.device("default.qubit", wires=n_qubits)
+        dev = qml.device("lightning.qubit", wires=n_qubits)
 
         @qml.qnode(dev, interface="torch")
         def circuit(inputs, weights):

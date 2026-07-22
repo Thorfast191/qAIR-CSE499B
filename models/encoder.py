@@ -1,26 +1,16 @@
-"""
-FIXED ENCODER CONFIGURATION
-Changes:
-1. Changed embedding model from "all-MiniLM-L6-v2" (384-dim) to "all-mpnet-base-v2" (768-dim)
-2. Larger embeddings provide more capacity for complex reasoning
-3. MPNet is better for semantic understanding than MiniLM
-4. This pairs with DIM=768 in dataset.py
-"""
-
 import torch
 import torch.nn.functional as F
 
 from transformers import AutoTokenizer, AutoModel
 
+from config import EMBEDDING_MODEL, EMBEDDING_DIM
+
 
 class HypothesisEncoder:
 
     def __init__(
-        self, 
-        # FIXED: Changed from "sentence-transformers/all-MiniLM-L6-v2" (384-dim)
-        # to "sentence-transformers/all-mpnet-base-v2" (768-dim)
-        # MPNet provides better semantic representation and 2x larger embedding space
-        model_name="sentence-transformers/all-mpnet-base-v2",
+        self,
+        model_name=EMBEDDING_MODEL,
         device="cuda"
     ):
 
@@ -36,7 +26,17 @@ class HypothesisEncoder:
             p.requires_grad = False
 
         self.dim = self.model.config.hidden_size
-        
+
+        if model_name == EMBEDDING_MODEL:
+            # Everything downstream (dataset.py, sample_inference.py, ...)
+            # reads dim from config.EMBEDDING_DIM rather than this instance,
+            # so a silent mismatch here would surface as a shape error far
+            # away from its cause. Catch it at the source instead.
+            assert self.dim == EMBEDDING_DIM, (
+                f"{model_name} produces {self.dim}-dim embeddings but "
+                f"config.EMBEDDING_DIM is {EMBEDDING_DIM}. Update config.py."
+            )
+
         print(f"[ENCODER] Using {model_name}")
         print(f"[ENCODER] Embedding dimension: {self.dim}")
 

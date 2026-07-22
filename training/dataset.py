@@ -5,12 +5,12 @@ import torch
 from tqdm.auto import tqdm
 from torch.utils.data import Dataset
 
+from config import EMBEDDING_DIM as DIM, EMBEDDING_MODEL
+
 from benchmarks.arc import load_arc
 
-from models.generator import HypothesisGenerator
+from models.generator import HypothesisGenerator, LLM_NAME
 from models.encoder import HypothesisEncoder
-
-DIM = 768
 
 
 class QAIRDataset(Dataset):
@@ -205,9 +205,9 @@ class QAIRDataset(Dataset):
 
                         "complete": False,
 
-                        "encoder": "MiniLM-L6-v2",
+                        "encoder": EMBEDDING_MODEL,
 
-                        "generator": "Qwen2.5",
+                        "generator": LLM_NAME,
 
                         "version": 32,
                     }
@@ -242,9 +242,9 @@ class QAIRDataset(Dataset):
 
             "complete": finished_full_split,
 
-            "encoder": "MiniLM-L6-v2",
+            "encoder": EMBEDDING_MODEL,
 
-            "generator": "Qwen2.5",
+            "generator": LLM_NAME,
 
             "version": 32,
         }

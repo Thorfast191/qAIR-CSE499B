@@ -4,6 +4,17 @@ from functools import partial
 
 from torch.utils.data import DataLoader
 
+from config import (
+    CACHE_DIR,
+    CKPT_DIR,
+    EPOCHS,
+    PATIENCE,
+    PERSISTENT_STEPS,
+    N_QUBITS,
+    BATCH_SIZE,
+    WEIGHT_DECAY,
+)
+
 from training.dataset import (
     QAIRDataset,
     collate_fn,
@@ -11,6 +22,7 @@ from training.dataset import (
 )
 
 from training.train import Trainer
+from training.checkpoint import load_or_resume
 
 from models.full_model import QAIRvNext
 
@@ -18,13 +30,13 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def run_training(
-    cache_dir="./cache",
-    ckpt_dir="./ckpt",
+    cache_dir=CACHE_DIR,
+    ckpt_dir=CKPT_DIR,
     train_samples=None,
     val_samples=None,
-    epochs=20,
-    persistent_steps=5,
-    n_qubits=12,
+    epochs=EPOCHS,
+    persistent_steps=PERSISTENT_STEPS,
+    n_qubits=N_QUBITS,
 ):
 
     print("=" * 60)
@@ -37,14 +49,14 @@ def run_training(
 
     train_loader = DataLoader(
         train_ds,
-        batch_size=8,
+        batch_size=BATCH_SIZE,
         shuffle=True,
         collate_fn=partial(collate_fn, shuffle_options=True),
     )
 
     val_loader = DataLoader(
         val_ds,
-        batch_size=8,
+        batch_size=BATCH_SIZE,
         shuffle=False,
         collate_fn=partial(collate_fn, shuffle_options=False),
     )
@@ -67,40 +79,10 @@ def run_training(
         device=device,
         ckpt_dir=ckpt_dir,
         name="qair_v40",
-        weight_decay=2e-2,
+        weight_decay=WEIGHT_DECAY,
     )
 
-    latest_ckpt = os.path.join(ckpt_dir, "qair_v40_latest.pt")
-
-    start_epoch = 0
-    best_acc = 0.0
-    print("\nCheckpoint Search:")
-    print(latest_ckpt)
-    print("Exists:", os.path.exists(latest_ckpt))
-
-    if os.path.exists(latest_ckpt):
-
-        print("\n[RESUME] Loading checkpoint:")
-
-        ckpt = torch.load(latest_ckpt, map_location=device)
-
-        model.load_state_dict(ckpt["model"])
-        trainer.optim.load_state_dict(ckpt["optimizer"])
-
-        trainer.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            trainer.optim, T_max=epochs, eta_min=1e-6,
-        )
-
-        if ckpt.get("scheduler") is not None:
-            trainer.scheduler.load_state_dict(ckpt["scheduler"])
-
-        if ckpt.get("scaler") is not None:
-            trainer.scaler.load_state_dict(ckpt["scaler"])
-
-        best_acc = ckpt.get("best_acc", 0.0)
-        start_epoch = ckpt["epoch"] + 1
-
-        print(f"Resuming from epoch {start_epoch}")
+    start_epoch, best_acc, _ = load_or_resume(trainer, ckpt_dir, "qair_v40", epochs)
 
     print(f"\nTraining from epoch {start_epoch} to {epochs}")
 
@@ -108,7 +90,7 @@ def run_training(
         epochs=epochs,
         start_epoch=start_epoch,
         best_acc=best_acc,
-        patience=5,
+        patience=PATIENCE,
     )
 
     # Save the config alongside so inference can't silently load with

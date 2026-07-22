@@ -140,12 +140,6 @@ class CollapseController(nn.Module):
 
         )
 
-        if self.training and torch.rand(1).item() < 0.01:
-            print(f"Temp: {temperature.mean().item():.3f}")
-            print(f"Entropy: {entropy.mean().item():.3f}")
-            print(f"Peak: {peak.mean().item():.3f}")
-            print(f"Energy std: {raw_energy.std().item():.3f}")
-
         return {
 
             "energy": energy,
