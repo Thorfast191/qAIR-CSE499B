@@ -115,20 +115,22 @@ A deconfounded grid (`training/ablations.py`) that toggles quantum / validator /
 
 ## 1. Offline stage — turning a question into embeddings
 
-Generation and encoding happen once per dataset split and are cached to disk (`cache/arc_*.pt`); they are **not** part of the trainable model.
+Generation and encoding happen once per dataset split and are cached to disk (`cache/arc_*.pt`); they are **not** part of the trainable model. Hypotheses are generated in batches of `GEN_BATCH_SIZE` (`models/generator.py`'s `generate_batch`, one padded `model.generate()` call per chunk) rather than one question at a time -- this only speeds up cache building, not per-epoch training, since the cache is built once and reused across every epoch.
 
 ```mermaid
 flowchart TD
-    Q["Question stem"] --> GEN["HypothesisGenerator<br/>Qwen2.5-0.5B-Instruct<br/>models/generator.py"]
+    Q["Question stem"] --> GEN["HypothesisGenerator<br/>Qwen2.5-0.5B-Instruct, batched<br/>models/generator.py"]
     OPT["N answer options"] --> GEN
     GEN --> HT["K hypothesis strings<br/>one per option, LLM-generated<br/>(falls back to a templated<br/>hypothesis if parsing/quality fails)"]
-    HT --> ENC["HypothesisEncoder<br/>sentence-transformers/all-mpnet-base-v2<br/>models/encoder.py"]
+    HT --> ENC["HypothesisEncoder<br/>sentence-transformers/all-MiniLM-L6-v2<br/>models/encoder.py"]
     OPT --> ENC
-    ENC --> H["H: hypothesis embeddings<br/>(batch, K, 768)"]
-    ENC --> O["O: option embeddings<br/>(batch, N, 768)"]
+    ENC --> H["H: hypothesis embeddings<br/>(batch, K, 384)"]
+    ENC --> O["O: option embeddings<br/>(batch, N, 384)"]
     H --> CACHE[("cache/arc_train.pt<br/>cache/arc_validation.pt")]
     O --> CACHE
 ```
+
+Loading a cache built under a different `EMBEDDING_DIM` (e.g. an older run) raises an explicit error instead of silently mixing incompatible embeddings -- `training/dataset.py` checks the cached tensor's last dimension against `config.EMBEDDING_DIM` before using it.
 
 ## 2. Online stage — `QAIRvNext.forward(H, O, y)`
 
@@ -136,12 +138,12 @@ This is the trainable part. Every arrow below is a real tensor produced by the c
 
 ```mermaid
 flowchart TD
-    H["H: hypothesis embeddings (B,K,768)"] --> PR["PersistentReasoner<br/>steps x Hamiltonian evolution"]
+    H["H: hypothesis embeddings (B,K,384)"] --> PR["PersistentReasoner<br/>steps x Hamiltonian evolution"]
     PR -->|"H' (evolved)"| QL["QuantumEvolutionLayer"]
     QL -->|"quantum_energy (B,K)"| FUS
     QL -->|"H'' = H' + q_state"| VAL["HypothesisValidator"]
     QL -->|"H''"| SEL["EnergyAnswerSelector"]
-    O["O: option embeddings (B,N,768)"] --> SEL
+    O["O: option embeddings (B,N,384)"] --> SEL
     VAL -->|"validator_energy (B,K)"| FUS["EnergyFusion"]
     SEL -->|"answer_energy (B,K,N)"| FUS
     SEL -->|"answer_energy (B,K,N)"| MARG["Weighted marginalization<br/>over hypotheses"]
@@ -156,12 +158,12 @@ Note the final step is a **soft** marginalization: the model doesn't pick one hy
 
 # 🔬 How Hypotheses Become Qubits
 
-This is the part of `models/quantum_layer.py` that actually touches PennyLane. `n_qubits` defaults to 12; the circuit runs on the `lightning.qubit` simulator (exact statevector, no shot noise).
+This is the part of `models/quantum_layer.py` that actually touches PennyLane. `n_qubits` defaults to 6 (down from 12 in earlier versions -- see the note below); the circuit runs on the `lightning.qubit` simulator (exact statevector, no shot noise).
 
 ```mermaid
 flowchart LR
-    H["hypothesis embedding<br/>(768-dim)"] --> N["L2 normalize"]
-    N --> C["compress:<br/>Linear 768→768, GELU,<br/>Linear 768→n_qubits"]
+    H["hypothesis embedding<br/>(384-dim)"] --> N["L2 normalize"]
+    N --> C["compress:<br/>Linear 384→384, GELU,<br/>Linear 384→n_qubits"]
     C --> S["z = pi * tanh(z)<br/>squash into [-pi, pi]"]
     S --> CIRC
 
@@ -172,14 +174,16 @@ flowchart LR
         ENT --> MEAS["expectation values:<br/>X_i, Y_i, Z_i per wire"]
     end
 
-    CIRC --> V["3 x n_qubits real vector<br/>(36-dim by default)"]
-    V --> EX["expand:<br/>Linear, GELU, LayerNorm, Dropout<br/>back to 768-dim"]
+    CIRC --> V["3 x n_qubits real vector<br/>(18-dim by default)"]
+    V --> EX["expand:<br/>Linear, GELU, LayerNorm, Dropout<br/>back to 384-dim"]
     EX --> GATE["learned sigmoid gate:<br/>blend quantum output with<br/>the classical vector it came from"]
-    GATE --> QSTATE["q_state (768-dim)<br/>added back: H'' = H' + q_state"]
+    GATE --> QSTATE["q_state (384-dim)<br/>added back: H'' = H' + q_state"]
     GATE --> EHEAD["energy_head → quantum_energy<br/>scalar per hypothesis, tanh-bounded"]
 ```
 
 **What's genuinely "quantum" here:** the Hadamards put every wire into superposition before any data is loaded; `AngleEmbedding` encodes each hypothesis's learned features as qubit rotation angles; `StronglyEntanglingLayers` couples the qubits together (a classical MLP can't do this — entanglement means the joint state isn't separable into independent per-qubit factors); the Pauli expectation values are the quantum-mechanical observables of that entangled state. **What it is not:** this runs on a classical statevector simulator with autograd through it, so it's exact and noiseless — there's no sampling, no hardware, and no claimed computational advantage (see [Research Disclaimer](#️-research-disclaimer)). The circuit's outputs are just another differentiable feature transform from the training's point of view; the "quantum-ness" is in *how* that transform is structured, not in the training loop treating it specially.
+
+**Why 6 qubits, not 12:** the statevector this circuit simulates has `2^n_qubits` entries, and every gate acts on the whole vector -- cost scales roughly `O(n_qubits · 2^n_qubits)` per circuit evaluation, and this runs once per hypothesis, per sample, per batch, per epoch. At `n_qubits=12` this was the dominant per-epoch cost by a wide margin. Dropping to 6 qubits cuts the simulated state from 4096-dim to 64-dim -- a large constant-factor speedup with a much smaller circuit -- while still producing an 18-dim measurement vector, comparable to what similar hybrid quantum-classical "feature map" layers use in the literature.
 
 ---
 
@@ -189,8 +193,8 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    H["H (B,K,768)"] --> FEAT["pairwise features per<br/>hypothesis x option pair:<br/>H, O, H-O, H*O concatenated"]
-    O["O (B,N,768)"] --> FEAT
+    H["H (B,K,384)"] --> FEAT["pairwise features per<br/>hypothesis x option pair:<br/>H, O, H-O, H*O concatenated"]
+    O["O (B,N,384)"] --> FEAT
     FEAT --> ENC2["encoder MLP -> z"]
     ENC2 --> HEADS["4 heads: causal, diversity,<br/>specificity, relevance"]
     ENC2 --> GATE2["observable_gate:<br/>learned softmax over the 4 heads"]
@@ -240,6 +244,7 @@ flowchart LR
 - The quantum layer is force-run outside autocast in fp32 (`with autocast(enabled=False)`) — `lightning.qubit`/PennyLane's autograd through the circuit isn't mixed-precision safe, so only that submodule pays the fp32 cost.
 - Quantum and validator parameters get a lower learning rate (2e-4) than the rest of the model (5e-4) since they're the newest, least-converged components.
 - All of this is centralized in [`config.py`](config.py) — dim, `n_qubits`, `persistent_steps`, LRs, batch size, epochs, patience, and checkpoint/cache directories are defined once and imported everywhere, rather than hardcoded per entry point.
+- **Current defaults (v41):** `batch_size=16`, `epochs=30` — both increased from the previous version (`8`, `20`) since cutting `n_qubits` and the embedding dim (see above) freed up per-epoch compute budget. `patience=5` early stopping means the epoch ceiling is a cap, not a commitment.
 
 ---
 
@@ -321,7 +326,7 @@ pip install -r requirements.txt
 
 # ☁️ Google Colab Setup
 
-The full Colab workflow (mount Drive, clone, install, run the ablation suite, evaluate, generate visualizations) lives in [`notebooks/qair_v40_colab.ipynb`](notebooks/qair_v40_colab.ipynb) — open it directly from GitHub in Colab rather than copying snippets.
+The full Colab workflow (mount Drive, clone, install, run the ablation suite, evaluate, generate visualizations) lives in [`notebooks/qair_v41_colab.ipynb`](notebooks/qair_v41_colab.ipynb) — open it directly from GitHub in Colab rather than copying snippets. It uses a fresh `qAIR_V41` Drive folder, separate from any earlier `qAIR_V40` cache/checkpoints (those were built with a different embedding dimension and aren't compatible -- see the cache dim-consistency check noted above).
 
 Minimal version, if you just need the paths:
 
@@ -331,7 +336,7 @@ import os
 
 drive.mount('/content/drive')
 
-BASE = "/content/drive/MyDrive/qAIR_V40"
+BASE = "/content/drive/MyDrive/qAIR_V41"
 for p in ["cache", "ckpt", "logs", "exports"]:
     os.makedirs(f"{BASE}/{p}", exist_ok=True)
 ```
@@ -373,7 +378,7 @@ Documented honestly so the architecture diagrams above aren't read as claims abo
 
 - **Validator guidance isn't closed-loop.** `HypothesisValidator` computes a `potential` field meant to steer `PersistentReasoner`'s Hamiltonian evolution (`persistent_reasoner.py` already accepts a `potential` argument for this), but `QAIRvNext.forward` calls `self.reasoner(H)` without ever passing it in. The validator currently only affects the final answer through `validator_energy` in `EnergyFusion`, not through the reasoning trajectory itself. Wiring this up is a small, well-contained change if/when it's wanted.
 - **The quantum layer is a simulator, not hardware.** `lightning.qubit` runs an exact statevector simulation with autograd through it — no shot noise, no physical qubits, no claimed quantum computational advantage. It's a differentiable circuit-structured feature transform.
-- **`visualization/*.py` and `evaluation/sample_inference.py` are manual tools.** They aren't invoked automatically by `main.py` or the training loop; run them yourself from a notebook (see `notebooks/qair_v40_colab.ipynb` for the intended usage).
+- **`visualization/*.py` and `evaluation/sample_inference.py` are manual tools.** They aren't invoked automatically by `main.py` or the training loop; run them yourself from a notebook (see `notebooks/qair_v41_colab.ipynb` for the intended usage).
 - **Only ARC is implemented.** The other benchmarks listed above are planned, not wired up.
 
 ---

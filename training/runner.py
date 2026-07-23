@@ -40,7 +40,7 @@ def run_training(
 ):
 
     print("=" * 60)
-    print("qAIR-V40 TRAINING")
+    print("qAIR-V41 TRAINING")
     print("=" * 60)
 
     train_ds = QAIRDataset(split="train", max_samples=train_samples, cache_dir=cache_dir)

@@ -27,6 +27,15 @@ class HypothesisGenerator:
             trust_remote_code=True,
         )
 
+        # Left-padding is required for batched causal-LM generation: with
+        # left padding every sample's generated continuation starts at the
+        # same offset (inputs["input_ids"].shape[1]) regardless of prompt
+        # length, so generate_batch() can slice all outputs the same way.
+        self.tokenizer.padding_side = "left"
+
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
         self.model = AutoModelForCausalLM.from_pretrained(
             LLM_NAME,
             torch_dtype=torch.float16,
@@ -161,7 +170,43 @@ Hypotheses:"""
         return True
 
     # ==========================================================
-    # GENERATE
+    # SHARED POST-PROCESSING (parse -> fallback-pad -> quality check)
+    # ==========================================================
+
+    def _postprocess(self, question, options, decoded):
+
+        hypotheses = self.parse_output(
+            decoded,
+            len(options),
+        )
+
+        # Fallback for insufficient hypotheses
+        if len(hypotheses) < len(options):
+
+            fallback = self.fallback(
+                question,
+                options,
+            )
+
+            while len(hypotheses) < len(options):
+                hyp_idx = len(hypotheses)
+                hypotheses.append(fallback[hyp_idx])
+
+        # Quality validation
+        final_hyps = []
+        for hyp in hypotheses[:len(options)]:
+            if self.is_valid_hypothesis(hyp):
+                final_hyps.append(hyp)
+            else:
+                # Use fallback for this option
+                final_hyps.append(
+                    self.fallback(question, options)[len(final_hyps)]
+                )
+
+        return final_hyps[:len(options)]
+
+    # ==========================================================
+    # GENERATE (single question)
     # ==========================================================
 
     @torch.no_grad()
@@ -211,32 +256,75 @@ Hypotheses:"""
             skip_special_tokens=True,
         )
 
-        hypotheses = self.parse_output(
-            decoded,
-            len(options),
+        return self._postprocess(question, options, decoded)
+
+    # ==========================================================
+    # GENERATE (batched) -- same prompt/parsing/fallback logic as
+    # generate(), but runs one model.generate() call for a whole list
+    # of questions instead of one call per question. This is what
+    # training/dataset.py uses to build the cache -- it's the only
+    # thing that makes hypothesis generation batch-friendly, since
+    # generate() alone processes one example at a time.
+    # ==========================================================
+
+    @torch.no_grad()
+    def generate_batch(self, questions, options_list):
+
+        prompts = [
+            self.build_prompt(q, opts)
+            for q, opts in zip(questions, options_list)
+        ]
+
+        texts = [
+            self.tokenizer.apply_chat_template(
+                [
+                    {
+                        "role": "system",
+                        "content": "You are an expert scientific reasoning system.",
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            for prompt in prompts
+        ]
+
+        inputs = self.tokenizer(
+            texts,
+            return_tensors="pt",
+            padding=True,
+        ).to(self.device)
+
+        outputs = self.model.generate(
+            **inputs,
+            max_new_tokens=96,
+            temperature=0.3,
+            top_p=0.95,
+            do_sample=True,
+            repetition_penalty=1.10,
+            pad_token_id=self.tokenizer.eos_token_id,
         )
 
-        # Fallback for insufficient or low-quality hypotheses
-        if len(hypotheses) < len(options):
+        # Left-padding means every sample's prompt occupies the same
+        # number of columns, so the generated continuation always starts
+        # at this same offset for every row in the batch.
+        input_len = inputs["input_ids"].shape[1]
 
-            fallback = self.fallback(
-                question,
-                options,
+        results = []
+
+        for i, (question, options) in enumerate(zip(questions, options_list)):
+
+            generated = outputs[i][input_len:]
+
+            decoded = self.tokenizer.decode(
+                generated,
+                skip_special_tokens=True,
             )
 
-            while len(hypotheses) < len(options):
-                hyp_idx = len(hypotheses)
-                hypotheses.append(fallback[hyp_idx])
+            results.append(self._postprocess(question, options, decoded))
 
-        # Quality validation
-        final_hyps = []
-        for hyp in hypotheses[:len(options)]:
-            if self.is_valid_hypothesis(hyp):
-                final_hyps.append(hyp)
-            else:
-                # Use fallback for this option
-                final_hyps.append(
-                    self.fallback(question, options)[len(final_hyps)]
-                )
-
-        return final_hyps[:len(options)]
+        return results

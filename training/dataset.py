@@ -5,7 +5,7 @@ import torch
 from tqdm.auto import tqdm
 from torch.utils.data import Dataset
 
-from config import EMBEDDING_DIM as DIM, EMBEDDING_MODEL
+from config import EMBEDDING_DIM as DIM, EMBEDDING_MODEL, GEN_BATCH_SIZE
 
 from benchmarks.arc import load_arc
 
@@ -47,6 +47,28 @@ class QAIRDataset(Dataset):
                 self.samples = loaded
                 is_complete = True
                 resume_raw_index = 0
+
+            # Refuse to silently mix embeddings built with a different
+            # encoder/dim than the one config.py currently points at. This
+            # is the exact "mat1 and mat2 shapes cannot be multiplied"
+            # failure this project already hit once (384 -> 768); without
+            # this guard, moving the dim back down (768 -> 384) would
+            # silently load the old cache and hit it again, just deeper
+            # into training instead of at dataset construction.
+            if self.samples:
+
+                cached_dim = self.samples[0]["H"].shape[-1]
+
+                if cached_dim != DIM:
+
+                    raise RuntimeError(
+                        f"{cache_path} was built with {cached_dim}-dim "
+                        f"embeddings, but config.EMBEDDING_DIM is now {DIM} "
+                        f"(config.EMBEDDING_MODEL={EMBEDDING_MODEL}). Move, "
+                        f"rename, or delete {cache_path} and rebuild before "
+                        f"training -- refusing to silently mix incompatible "
+                        f"cached embeddings."
+                    )
 
             print(f"[CACHE LOADED] {len(self.samples)} samples "
                   f"(complete={is_complete})")
@@ -99,12 +121,112 @@ class QAIRDataset(Dataset):
 
         last_raw_index = resume_raw_index
 
+        # Examples that passed filtering but haven't been generated/encoded
+        # yet: (raw_idx, stem, options, y). Generation and encoding run in
+        # batches of GEN_BATCH_SIZE instead of one example at a time -- an
+        # LLM decoding one prompt per call wastes almost all of a GPU's
+        # throughput compared to decoding a padded batch of prompts at once.
+        pending = []
+
+        def flush_pending():
+
+            nonlocal count, last_raw_index
+
+            if not pending:
+                return
+
+            questions = [item[1] for item in pending]
+            options_list = [item[2] for item in pending]
+
+            try:
+                hyps_list = generator.generate_batch(questions, options_list)
+            except Exception as e:
+                print(f"[BATCH GENERATE FAILED] {e} -- falling back per-item")
+                hyps_list = [
+                    generator.fallback(q, o)
+                    for q, o in zip(questions, options_list)
+                ]
+
+            all_hyp_texts = [h for hyps in hyps_list for h in hyps]
+            all_opt_texts = [o for options in options_list for o in options]
+
+            H_all = encoder.encode(all_hyp_texts)
+            O_all = encoder.encode(all_opt_texts)
+
+            h_off = 0
+            o_off = 0
+
+            for (raw_idx, stem, options, y), hyps in zip(pending, hyps_list):
+
+                h_len = len(hyps)
+                o_len = len(options)
+
+                H = H_all[h_off:h_off + h_len]
+                O = O_all[o_off:o_off + o_len]
+
+                h_off += h_len
+                o_off += o_len
+
+                sample = {
+
+                    "question": stem,
+
+                    "options": options,
+
+                    "hypotheses": hyps,
+
+                    "option_index": list(range(len(options))),
+
+                    "H": H.cpu(),
+
+                    "O": O.cpu(),
+
+                    "y": y,
+                }
+
+                self.samples.append(sample)
+
+                count += 1
+
+                last_raw_index = raw_idx + 1
+
+                # ========================================
+                # PERIODIC SAVE (marked incomplete)
+                # ========================================
+
+                if count % 50 == 0:
+
+                    cache = {
+
+                        "samples": self.samples,
+
+                        "raw_index": last_raw_index,
+
+                        "complete": False,
+
+                        "encoder": EMBEDDING_MODEL,
+
+                        "generator": LLM_NAME,
+
+                        "version": 32,
+                    }
+
+                    torch.save(cache, cache_path)
+
+                    print(f"[AUTOSAVE] {count} samples "
+                          f"(raw_index={last_raw_index})")
+
+            pending.clear()
+
         for raw_idx, ex in enumerate(
             tqdm(raw, desc=f"Building {split} cache", initial=resume_raw_index)
         ):
 
             if raw_idx < resume_raw_index:
                 continue
+
+            if max_samples is not None and count >= max_samples:
+                break
 
             try:
 
@@ -139,94 +261,52 @@ class QAIRDataset(Dataset):
                 # ============================================
 
                 if len(options) < 2:
+                    # Resolve anything already queued before this raw_idx
+                    # advances past it, so last_raw_index never jumps ahead
+                    # of samples that haven't actually been saved yet.
+                    flush_pending()
                     last_raw_index = raw_idx + 1
                     continue
 
                 answer = ex["answerKey"]
 
                 if answer not in labels:
+                    flush_pending()
                     last_raw_index = raw_idx + 1
                     continue
 
                 y = labels.index(answer)
 
                 # ============================================
-                # HYPOTHESIS GENERATION
+                # QUEUE FOR BATCHED GENERATION + ENCODING
                 # ============================================
 
-                hypotheses = generator.generate(question=stem, options=options,)
+                pending.append((raw_idx, stem, options, y))
 
-                # ============================================
-                # EMBEDDINGS
-                # ============================================
+                hit_chunk_size = len(pending) >= GEN_BATCH_SIZE
 
-                H = encoder.encode(hypotheses)
+                hit_max_samples = (
+                    max_samples is not None
+                    and (count + len(pending)) >= max_samples
+                )
 
-                O = encoder.encode(options)
+                if hit_chunk_size or hit_max_samples:
+                    flush_pending()
 
-                # ============================================
-                # SAMPLE
-                # ============================================
-
-                sample = {
-
-                    "question": stem,
-
-                    "options": options,
-
-                    "hypotheses": hypotheses,
-
-                    "option_index": list(range(len(options))),
-
-                    "H": H.cpu(),
-
-                    "O": O.cpu(),
-
-                    "y": y,
-                }
-
-                self.samples.append(sample)
-
-                count += 1
-
-                last_raw_index = raw_idx + 1
-
-                # ============================================
-                # PERIODIC SAVE (marked incomplete)
-                # ============================================
-
-                if count % 50 == 0:
-
-                    cache = {
-
-                        "samples": self.samples,
-
-                        "raw_index": last_raw_index,
-
-                        "complete": False,
-
-                        "encoder": EMBEDDING_MODEL,
-
-                        "generator": LLM_NAME,
-
-                        "version": 32,
-                    }
-
-                    torch.save(cache, cache_path)
-
-                    print(f"[AUTOSAVE] {count} samples "
-                          f"(raw_index={last_raw_index})")
-
-                if max_samples is not None and count >= max_samples:
+                if hit_max_samples:
                     break
 
             except Exception as e:
 
                 print(f"[SKIP] {e}")
 
+                flush_pending()
+
                 last_raw_index = raw_idx + 1
 
                 continue
+
+        flush_pending()
 
         # ====================================================
         # FINAL SAVE (marked complete)

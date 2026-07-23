@@ -1,7 +1,7 @@
 import os
 import torch
 
-from config import EMBEDDING_DIM
+from config import EMBEDDING_DIM, N_QUBITS
 from models.generator import HypothesisGenerator
 from models.encoder import HypothesisEncoder
 from models.full_model import QAIRvNext
@@ -104,7 +104,7 @@ TEST_SAMPLES = [
     },
 ]
 
-def load_ablation_model(ckpt_dir, name, cfg, device, n_qubits=12):
+def load_ablation_model(ckpt_dir, name, cfg, device, n_qubits=N_QUBITS):
     """
     Loads a specific named ablation checkpoint (e.g. "A4_full_hybrid")
     with the EXACT config it was trained with, so persistent_steps /
