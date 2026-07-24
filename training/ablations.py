@@ -1,4 +1,3 @@
-import torch
 from functools import partial
 
 from torch.utils.data import DataLoader
@@ -11,6 +10,7 @@ from config import (
     N_QUBITS,
     BATCH_SIZE,
     WEIGHT_DECAY,
+    resolve_device,
 )
 
 from training.dataset import (
@@ -24,7 +24,7 @@ from training.checkpoint import load_or_resume
 
 from models.full_model import QAIRvNext
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = resolve_device()
 
 
 # Deconfounded grid: each row changes exactly one variable relative to

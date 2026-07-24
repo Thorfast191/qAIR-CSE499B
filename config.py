@@ -7,6 +7,27 @@ multiple places (e.g. embedding dim was 768 in training/dataset.py but
 Import from here instead of re-hardcoding.
 """
 
+import torch
+
+
+def resolve_device():
+    """
+    cuda > mps > cpu. Used everywhere instead of hardcoding "cuda" so the
+    pipeline runs (falls back gracefully) on CPU-only machines and on
+    Apple Silicon Macs instead of crashing outright. Note: the quantum
+    circuit (models/quantum_layer.py) always runs on lightning.qubit
+    (CPU) regardless of what this resolves to -- PennyLane's TorchLayer
+    handles moving data to/from the circuit transparently.
+    """
+
+    if torch.cuda.is_available():
+        return "cuda"
+
+    if torch.backends.mps.is_available():
+        return "mps"
+
+    return "cpu"
+
 # v41: switched from all-mpnet-base-v2 (768-dim) to all-MiniLM-L6-v2
 # (384-dim) and n_qubits 12 -> 6. The quantum circuit's simulation cost
 # scales roughly O(n_qubits * 2^n_qubits) -- 12 qubits was the dominant

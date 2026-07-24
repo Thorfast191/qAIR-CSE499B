@@ -12,15 +12,22 @@ import torch
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
+from config import resolve_device
+
 # Current model - reasonable for now, but could upgrade to larger model if resources allow
 LLM_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 
 
 class HypothesisGenerator:
 
-    def __init__(self, device="cuda"):
+    def __init__(self, device=None):
 
-        self.device = device
+        self.device = device or resolve_device()
+
+        # fp16 has no efficient kernels on most CPUs (and isn't relevant
+        # on MPS the same way it is on CUDA) -- only use it on an actual
+        # CUDA GPU, fp32 everywhere else.
+        dtype = torch.float16 if self.device == "cuda" else torch.float32
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             LLM_NAME,
@@ -36,12 +43,24 @@ class HypothesisGenerator:
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        self.model = AutoModelForCausalLM.from_pretrained(
-            LLM_NAME,
-            torch_dtype=torch.float16,
-            device_map="auto",
-            trust_remote_code=True,
-        )
+        # device_map="auto" (via accelerate) targets CUDA specifically --
+        # on CPU/MPS just load normally and move the whole model over.
+        if self.device == "cuda":
+
+            self.model = AutoModelForCausalLM.from_pretrained(
+                LLM_NAME,
+                torch_dtype=dtype,
+                device_map="auto",
+                trust_remote_code=True,
+            )
+
+        else:
+
+            self.model = AutoModelForCausalLM.from_pretrained(
+                LLM_NAME,
+                torch_dtype=dtype,
+                trust_remote_code=True,
+            ).to(self.device)
 
         self.model.eval()
 

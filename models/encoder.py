@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 from transformers import AutoTokenizer, AutoModel
 
-from config import EMBEDDING_MODEL, EMBEDDING_DIM
+from config import EMBEDDING_MODEL, EMBEDDING_DIM, resolve_device
 
 
 class HypothesisEncoder:
@@ -11,14 +11,14 @@ class HypothesisEncoder:
     def __init__(
         self,
         model_name=EMBEDDING_MODEL,
-        device="cuda"
+        device=None
     ):
 
-        self.device = device
+        self.device = device or resolve_device()
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-        self.model = AutoModel.from_pretrained(model_name).to(device)
+        self.model = AutoModel.from_pretrained(model_name).to(self.device)
 
         self.model.eval()
 

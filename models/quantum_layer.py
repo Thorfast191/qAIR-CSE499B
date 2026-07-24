@@ -22,7 +22,11 @@ class QuantumEvolutionLayer(nn.Module):
             nn.Linear(dim, n_qubits),
         )
 
-        dev = qml.device("lightning.qubit", wires=n_qubits)
+        # batch_obs=True batches the 3*n_qubits separate expval() observables
+        # this circuit returns into fewer statevector passes, instead of
+        # re-deriving the state once per observable -- pure execution
+        # optimization, no change to what's computed.
+        dev = qml.device("lightning.qubit", wires=n_qubits, batch_obs=True)
 
         @qml.qnode(dev, interface="torch")
         def circuit(inputs, weights):

@@ -56,7 +56,13 @@ class Trainer:
             param_groups, weight_decay=weight_decay, betas=(0.9, 0.999)
         )
 
-        self.scaler = GradScaler("cuda", enabled=(device == "cuda"))
+        # Same reasoning as the autocast device_type below: only pass
+        # "cuda" when it's actually available, "cpu" otherwise (scaler
+        # stays disabled either way on non-CUDA devices).
+        self.scaler = GradScaler(
+            "cuda" if device == "cuda" else "cpu",
+            enabled=(device == "cuda"),
+        )
 
         self.scheduler = None
 
@@ -139,7 +145,14 @@ class Trainer:
                 y = batch["y"].to(self.device)
 
                 self.optim.zero_grad(set_to_none=True)
-                with autocast(device_type="cuda", enabled=(self.device == "cuda")):
+
+                # device_type must match an actually-available backend even
+                # when enabled=False -- "cuda" is only valid to pass when
+                # self.device is "cuda"; "cpu" is a safe, always-valid
+                # fallback for CPU/MPS runs (autocast stays disabled there).
+                autocast_device_type = "cuda" if self.device == "cuda" else "cpu"
+
+                with autocast(device_type=autocast_device_type, enabled=(self.device == "cuda")):
                     outputs = self.model(H, O, y)
                     loss = compute_loss(outputs, y)
 

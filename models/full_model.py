@@ -47,9 +47,19 @@ class QAIRvNext(nn.Module):
 
         if self.use_quantum:
 
-            from torch.amp import autocast
+            if H.is_cuda:
 
-            with autocast(device_type="cuda", enabled=False):
+                # Only construct a "cuda" autocast context on an actual CUDA
+                # tensor -- on CPU/MPS this context wouldn't do anything
+                # anyway (autocast is disabled either way in the training
+                # loop for non-CUDA devices), and some PyTorch versions
+                # validate device_type at construction even when disabled.
+                from torch.amp import autocast
+
+                with autocast(device_type="cuda", enabled=False):
+                    q_state, quantum_energy = self.quantum(H.float())
+
+            else:
                 q_state, quantum_energy = self.quantum(H.float())
 
             H = H + q_state
