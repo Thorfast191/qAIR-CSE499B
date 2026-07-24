@@ -1,0 +1,16 @@
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Generated cache/checkpoints/logs/exports -- these are large, regenerable,
+# and don't belong in version control. .gitkeep entries keep the empty
+# directories themselves tracked.
+cache/*
+!cache/.gitkeep
+ckpt/*
+!ckpt/.gitkeep
+logs/*
+!logs/.gitkeep
+exports/*
+!exports/.gitkeep
