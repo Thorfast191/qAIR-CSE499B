@@ -2,10 +2,13 @@ import torch.nn as nn
 
 from models.validator import HypothesisValidator
 from models.quantum_layer import QuantumEvolutionLayer
+from models.classical_control_layer import ClassicalControlLayer
 from models.persistent_reasoner import PersistentReasoner
 from models.collapse import CollapseController
 from models.answer_selector import EnergyAnswerSelector
 from models.energy_fusion import EnergyFusion
+
+BACKENDS = ("quantum", "classical_control", "none")
 
 
 class QAIRvNext(nn.Module):
@@ -17,18 +20,44 @@ class QAIRvNext(nn.Module):
         use_validator=True,
         persistent_steps=3,
         n_qubits=12,
+        backend=None,
     ):
 
         super().__init__()
 
-        self.use_quantum = use_quantum
+        # backend selects what occupies the quantum-layer slot:
+        #   "quantum"           -- QuantumEvolutionLayer (PennyLane circuit)
+        #   "classical_control" -- ClassicalControlLayer (parameter-matched
+        #                          classical MLP in the same slot -- see
+        #                          models/classical_control_layer.py)
+        #   "none"              -- no bottleneck layer at all
+        # use_quantum is kept as a backward-compatible alias (True ->
+        # "quantum", False -> "none") -- only used when backend isn't
+        # given explicitly, so existing call sites keep working. The
+        # submodule is stored as self.quantum regardless of which
+        # backend is chosen (not e.g. self.bottleneck) so that existing
+        # "quantum."-prefixed checkpoint state_dicts still load, and so
+        # training/train.py's quantum./validator.-prefixed lower-LR
+        # parameter group applies identically to both backends -- the
+        # comparison between them should differ only in what's inside
+        # that slot, not in how it's optimized.
+        if backend is None:
+            backend = "quantum" if use_quantum else "none"
+
+        if backend not in BACKENDS:
+            raise ValueError(f"backend must be one of {BACKENDS}, got {backend!r}")
+
+        self.backend = backend
+        self.use_quantum = backend != "none"
         self.use_validator = use_validator
         self.persistent_steps = persistent_steps  # saved for inference-time sanity checks
 
         self.reasoner = PersistentReasoner(dim, steps=persistent_steps)
 
-        if use_quantum:
+        if backend == "quantum":
             self.quantum = QuantumEvolutionLayer(dim, n_qubits=n_qubits)
+        elif backend == "classical_control":
+            self.quantum = ClassicalControlLayer(dim, n_qubits=n_qubits)
 
         if use_validator:
             self.validator = HypothesisValidator(dim)

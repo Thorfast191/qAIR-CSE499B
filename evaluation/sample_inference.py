@@ -113,10 +113,11 @@ def load_ablation_model(ckpt_dir, name, cfg, device, n_qubits=N_QUBITS):
 
     model = QAIRvNext(
         dim=EMBEDDING_DIM,
-        use_quantum=cfg["use_quantum"],
+        use_quantum=cfg.get("use_quantum", False),
         use_validator=cfg["use_validator"],
         persistent_steps=cfg["persistent_steps"],
         n_qubits=n_qubits,
+        backend=cfg.get("backend"),
     )
 
     ckpt_path = os.path.join(ckpt_dir, f"{name}_best.pt")

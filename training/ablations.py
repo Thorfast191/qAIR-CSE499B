@@ -33,6 +33,12 @@ device = resolve_device()
 #   A1  -> A1b : isolates quantum (steps fixed at 3, validator off)
 #   A2  -> A3  : isolates quantum (steps fixed at 3, validator on)
 #   A3  -> A4  : isolates persistent_steps (3 -> 5, quantum+validator on)
+#   A1b -> A1c : isolates quantum circuit structure vs. a parameter-matched
+#                classical MLP in the same slot (see
+#                models/classical_control_layer.py) -- same total layer
+#                parameter count either way, so a difference here isn't
+#                just "more capacity", it's specifically the circuit.
+#   A3  -> A3c : same isolation, with validator+persistent also on
 ABLATIONS = {
     "A1_baseline": {
         "use_quantum": False,
@@ -44,6 +50,11 @@ ABLATIONS = {
         "use_validator": False,
         "persistent_steps": 3,
     },
+    "A1c_classical_control_only": {
+        "backend": "classical_control",
+        "use_validator": False,
+        "persistent_steps": 3,
+    },
     "A2_validator": {
         "use_quantum": False,
         "use_validator": True,
@@ -51,6 +62,11 @@ ABLATIONS = {
     },
     "A3_persistent": {
         "use_quantum": True,
+        "use_validator": True,
+        "persistent_steps": 3,
+    },
+    "A3c_classical_control_persistent": {
+        "backend": "classical_control",
         "use_validator": True,
         "persistent_steps": 3,
     },
@@ -96,12 +112,19 @@ def run_ablation_suite(
         print(f"Running {name}")
         print(f"Config: {cfg}")
 
+        # Configs specify either "use_quantum" (the original two-way
+        # switch) or "backend" (needed for "classical_control", which
+        # use_quantum's bool can't express) -- QAIRvNext accepts both,
+        # backend taking precedence when both would apply.
+        has_bottleneck = cfg.get("backend") is not None or cfg.get("use_quantum", False)
+
         model = QAIRvNext(
             dim=DIM,
-            use_quantum=cfg["use_quantum"],
+            use_quantum=cfg.get("use_quantum", False),
             use_validator=cfg["use_validator"],
             persistent_steps=cfg["persistent_steps"],
             n_qubits=n_qubits,
+            backend=cfg.get("backend"),
         ).to(device)
 
         # NOTE: warm-starting from a "parent" ablation's converged weights
@@ -110,7 +133,7 @@ def run_ablation_suite(
         # through the newly-added component. Every config trains from a
         # fresh random init.
 
-        wd = WEIGHT_DECAY if (cfg["use_quantum"] or cfg["use_validator"]) else 1e-2
+        wd = WEIGHT_DECAY if (has_bottleneck or cfg["use_validator"]) else 1e-2
 
         trainer = Trainer(
             model=model,

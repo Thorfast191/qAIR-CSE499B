@@ -80,6 +80,16 @@ class QuantumEvolutionLayer(nn.Module):
 
         self.norm = nn.LayerNorm(dim)
 
+        # Printed so it can be compared directly against
+        # ClassicalControlLayer's printed count at runtime, rather than
+        # trusting a hand calculation.
+        total_params = sum(p.numel() for p in self.parameters())
+        circuit_params = sum(p.numel() for p in self.quantum.parameters())
+        print(
+            f"[QuantumEvolutionLayer] total parameters: {total_params:,} "
+            f"(circuit weights: {circuit_params:,})"
+        )
+
     def forward(self, H):
 
         B, K, D = H.shape
