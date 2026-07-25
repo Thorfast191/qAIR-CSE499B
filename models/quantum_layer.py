@@ -12,7 +12,7 @@ class QuantumEvolutionLayer(nn.Module):
     Quantum Hamiltonian Evolution Layer
     """
 
-    def __init__(self, dim, n_qubits=12, n_layers=3):
+    def __init__(self, dim, n_qubits=12, n_layers=3, verbose=False):
 
         super().__init__()
 
@@ -31,10 +31,24 @@ class QuantumEvolutionLayer(nn.Module):
         @qml.qnode(dev, interface="torch")
         def circuit(inputs, weights):
 
+            # Hadamard puts every wire in |+>, the +1 eigenstate of Pauli-X.
+            # AngleEmbedding's DEFAULT rotation is "X", and RX(t)|+> =
+            # exp(-i t/2)|+> -- a global phase, which no expectation value
+            # can observe. Written that way (as this layer was until the
+            # audit), the circuit's output is bit-exactly independent of
+            # `inputs`: measured std across distinct inputs was 0.000e+00,
+            # i.e. the whole layer was a learned constant and every quantum
+            # ablation run before this fix measured nothing.
+            #
+            # rotation="Y" keeps the intended "start in uniform
+            # superposition" motif while making the encoding observable:
+            # RY(t)|+> tilts the Bloch vector off the equator. Measured
+            # output std across inputs: 0.123 (vs 0.094 for dropping the
+            # Hadamard and keeping RX, 0.089 for RZ).
             for i in range(n_qubits):
                 qml.Hadamard(wires=i)
 
-            qml.AngleEmbedding(inputs, wires=range(n_qubits))
+            qml.AngleEmbedding(inputs, wires=range(n_qubits), rotation="Y")
 
             qml.StronglyEntanglingLayers(weights, wires=range(n_qubits))
 
@@ -82,13 +96,15 @@ class QuantumEvolutionLayer(nn.Module):
 
         # Printed so it can be compared directly against
         # ClassicalControlLayer's printed count at runtime, rather than
-        # trusting a hand calculation.
-        total_params = sum(p.numel() for p in self.parameters())
-        circuit_params = sum(p.numel() for p in self.quantum.parameters())
-        print(
-            f"[QuantumEvolutionLayer] total parameters: {total_params:,} "
-            f"(circuit weights: {circuit_params:,})"
-        )
+        # trusting a hand calculation. Opt-in: this used to fire on every
+        # model construction, including inside evaluation loops.
+        if verbose:
+            total_params = sum(p.numel() for p in self.parameters())
+            circuit_params = sum(p.numel() for p in self.quantum.parameters())
+            print(
+                f"[QuantumEvolutionLayer] total parameters: {total_params:,} "
+                f"(circuit weights: {circuit_params:,})"
+            )
 
     def forward(self, H):
 

@@ -118,6 +118,7 @@ def load_ablation_model(ckpt_dir, name, cfg, device, n_qubits=N_QUBITS):
         persistent_steps=cfg["persistent_steps"],
         n_qubits=n_qubits,
         backend=cfg.get("backend"),
+        use_question=cfg.get("use_question", True),
     )
 
     ckpt_path = os.path.join(ckpt_dir, f"{name}_best.pt")
@@ -157,9 +158,10 @@ def run_sample_evaluation(model, device):
 
         H = encoder.encode(hypotheses).unsqueeze(0)
         O = encoder.encode(options).unsqueeze(0)
+        Q = encoder.encode([question])
 
         with torch.no_grad():
-            outputs = model(H.to(device), O.to(device))
+            outputs = model(H.to(device), O.to(device), Q=Q.to(device))
 
         pred = outputs["scores"].argmax(dim=-1).item()
 

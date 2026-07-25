@@ -5,14 +5,35 @@ import torch.nn.functional as F
 
 class CollapseController(nn.Module):
     """
-    Adaptive Quantum Collapse Controller
+    Adaptive Collapse Controller.
 
-    Improvements
-    ------------
-    • Per-sample temperature
-    • Per-sample collapse bias
-    • Confidence estimation
-    • Numerically stable Born Rule
+    Applies a temperature-scaled Born-rule step over the fused
+    per-hypothesis energy to decide how much each hypothesis is trusted
+    in the final answer.
+
+    Honest note on the "Born rule" (see README)
+    -------------------------------------------
+    With real, non-negative amplitudes, amplitude = exp(-E/2T) followed
+    by L2 normalization and squaring is *algebraically identical* to
+    softmax(-E / T). Verified numerically to fp32 epsilon (5.96e-08).
+    It is written in amplitude form because that is the object the
+    project reasons about, and because it is the natural hook for the
+    complex-amplitude extension (where cross-terms 2*Re(a_i conj(a_j))
+    would make it genuinely non-classical) -- but as it stands it carries
+    no expressive content beyond a softmax, and the README says so.
+
+    Fixed in the audit
+    ------------------
+    * `diversity` and `spread` were previously ADDED to the loss with
+      positive coefficients. Both are globally minimized at exactly zero,
+      attained when every hypothesis has identical energy -- i.e. the
+      loss was rewarding total hypothesis collapse in a model whose whole
+      premise is keeping hypotheses distinct. Training drove them to
+      8.2e-09 and 1.4e-08 respectively. They are now diagnostics only.
+    * The fixed entropy target (0.5 nats) was applied here AND again in
+      training/losses.py -- double-counted, and anti-calibration: it
+      forced high confidence regardless of whether confidence was
+      warranted. Removed; cross-entropy calibrates the distribution.
     """
 
     def __init__(self):
@@ -41,13 +62,17 @@ class CollapseController(nn.Module):
         ####################################################
 
         self.confidence = nn.Sequential(
-            nn.Linear(32,16),
+            nn.Linear(32, 16),
             nn.GELU(),
-            nn.Linear(16,1),
+            nn.Linear(16, 1),
             nn.Sigmoid(),
         )
 
-    def forward(self, energy):
+    def forward(self, energy, mask=None):
+        """
+        energy : (B, K) fused per-hypothesis energy
+        mask   : (B, K) bool, True for real hypotheses
+        """
 
         raw_energy = energy
 
@@ -65,7 +90,13 @@ class CollapseController(nn.Module):
             energy.unsqueeze(-1)
         )
 
-        z_global = z.mean(dim=1)
+        if mask is not None:
+            # Don't let padded hypotheses shift the pooled statistics the
+            # temperature and confidence heads read.
+            m = mask.unsqueeze(-1).to(z.dtype)
+            z_global = (z * m).sum(dim=1) / m.sum(dim=1).clamp(min=1.0)
+        else:
+            z_global = z.mean(dim=1)
 
         ####################################################
         # Adaptive parameters
@@ -82,10 +113,20 @@ class CollapseController(nn.Module):
         confidence = self.confidence(z_global).squeeze(-1)
 
         ####################################################
-        # Stable Born Rule
+        # Born rule (numerically stabilized)
+        #
+        # amplitude ~ exp(-E / 2T), L2-normalized; probability =
+        # amplitude^2. Equivalent to softmax(-E / T) -- see class
+        # docstring. validator.py uses the identical convention; before
+        # the audit it L1-normalized instead, which is not the Born rule
+        # and gave it an effective temperature of T/2 for the same
+        # nominal T.
         ####################################################
 
-        log_amp = -energy / (2.0 * temperature) 
+        log_amp = -energy / (2.0 * temperature)
+
+        if mask is not None:
+            log_amp = log_amp.masked_fill(~mask, float("-inf"))
 
         log_amp = log_amp - log_amp.max(
             dim=1,
@@ -95,8 +136,8 @@ class CollapseController(nn.Module):
         amplitude = torch.exp(log_amp)
 
         amplitude = amplitude / torch.sqrt(
-                    (amplitude ** 2).sum(dim=1, keepdim=True) + 1e-8
-                )
+            (amplitude ** 2).sum(dim=1, keepdim=True) + 1e-8
+        )
 
         probabilities = amplitude.pow(2)
 
@@ -109,36 +150,25 @@ class CollapseController(nn.Module):
         )
 
         ####################################################
-        # Metrics
+        # Diagnostics (NOT loss terms -- see class docstring)
         ####################################################
 
         entropy = -(probabilities * torch.log(probabilities + 1e-8)).sum(dim=1)
 
-        diversity = raw_energy.var(dim=1)
-
-        spread = raw_energy.max(dim=1).values - raw_energy.min(dim=1).values
+        if mask is not None:
+            valid = mask.to(raw_energy.dtype)
+            n = valid.sum(dim=1).clamp(min=1.0)
+            mean_e = (raw_energy * valid).sum(dim=1) / n
+            diversity = ((raw_energy - mean_e.unsqueeze(-1)) ** 2 * valid).sum(dim=1) / n
+            spread = (
+                raw_energy.masked_fill(~mask, float("-inf")).max(dim=1).values
+                - raw_energy.masked_fill(~mask, float("inf")).min(dim=1).values
+            )
+        else:
+            diversity = raw_energy.var(dim=1)
+            spread = raw_energy.max(dim=1).values - raw_energy.min(dim=1).values
 
         peak = probabilities.max(dim=1).values
-
-        ####################################################
-        # Adaptive collapse objective
-        ####################################################
-
-        target_entropy = torch.full_like(entropy, 0.5)
-
-        collapse_loss = (
-
-            0.10 * (entropy - target_entropy).pow(2).mean()
-
-            +
-
-            0.01 * diversity.mean()
-
-            +
-
-            0.005 * spread.mean()
-
-        )
 
         return {
 
@@ -161,7 +191,5 @@ class CollapseController(nn.Module):
             "spread": spread.mean(),
 
             "peak": peak.mean(),
-
-            "collapse_loss": collapse_loss,
 
         }

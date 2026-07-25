@@ -5,7 +5,12 @@ import torch
 from tqdm.auto import tqdm
 from torch.utils.data import Dataset
 
-from config import EMBEDDING_DIM as DIM, EMBEDDING_MODEL, GEN_BATCH_SIZE
+from config import (
+    EMBEDDING_DIM as DIM,
+    EMBEDDING_MODEL,
+    GEN_BATCH_SIZE,
+    CACHE_VERSION,
+)
 
 from benchmarks.arc import load_arc
 
@@ -14,6 +19,24 @@ from models.encoder import HypothesisEncoder
 
 
 class QAIRDataset(Dataset):
+    """
+    Cached (question, hypotheses, options) embeddings for one ARC split.
+
+    Each sample carries:
+        Q  (D,)    question embedding      -- added in cache v33
+        H  (K, D)  hypothesis embeddings
+        O  (N, D)  option embeddings
+        y  int     index of the correct option
+        is_fallback (K,) bool              -- added in cache v33
+
+    The question embedding is the single highest-impact field here. It
+    was absent for the project's whole history even though the question
+    TEXT was already cached: measured on these exact embeddings, a plain
+    MLP scores 0.3585 from options alone and 0.4849 once the question is
+    available. Caches built before v33 are migrated in place on load --
+    that only needs the encoder, not the LLM, so it takes a minute
+    rather than hours.
+    """
 
     def __init__(self, split="train", max_samples=None, cache_dir="./cache"):
 
@@ -39,6 +62,7 @@ class QAIRDataset(Dataset):
                 self.samples = loaded.get("samples", [])
                 is_complete = loaded.get("complete", False)
                 resume_raw_index = loaded.get("raw_index", 0)
+                version = loaded.get("version", 0)
             else:
                 # Old-format cache (plain list). We have no way of knowing
                 # whether it was finished, so treat it as complete to avoid
@@ -47,6 +71,7 @@ class QAIRDataset(Dataset):
                 self.samples = loaded
                 is_complete = True
                 resume_raw_index = 0
+                version = 0
 
             # Refuse to silently mix embeddings built with a different
             # encoder/dim than the one config.py currently points at. This
@@ -71,7 +96,10 @@ class QAIRDataset(Dataset):
                     )
 
             print(f"[CACHE LOADED] {len(self.samples)} samples "
-                  f"(complete={is_complete})")
+                  f"(complete={is_complete}, version={version})")
+
+            if self.samples and is_complete:
+                self._migrate(cache_path, loaded if isinstance(loaded, dict) else {})
 
             if max_samples is not None:
                 # Caller explicitly wants a capped subset. If we already
@@ -81,6 +109,7 @@ class QAIRDataset(Dataset):
                 return
 
             if is_complete:
+                self.report_quality(split)
                 return
 
             print(
@@ -106,10 +135,7 @@ class QAIRDataset(Dataset):
 
         if split not in ds:
 
-            if split == "validation" and "test" in ds:
-                split = "test"
-
-            elif "validation" in ds:
+            if "validation" in ds:
                 split = "validation"
 
             else:
@@ -122,10 +148,7 @@ class QAIRDataset(Dataset):
         last_raw_index = resume_raw_index
 
         # Examples that passed filtering but haven't been generated/encoded
-        # yet: (raw_idx, stem, options, y). Generation and encoding run in
-        # batches of GEN_BATCH_SIZE instead of one example at a time -- an
-        # LLM decoding one prompt per call wastes almost all of a GPU's
-        # throughput compared to decoding a padded batch of prompts at once.
+        # yet: (raw_idx, stem, options, y).
         pending = []
 
         def flush_pending():
@@ -139,24 +162,30 @@ class QAIRDataset(Dataset):
             options_list = [item[2] for item in pending]
 
             try:
-                hyps_list = generator.generate_batch(questions, options_list)
+                batch_out = generator.generate_batch_with_flags(
+                    questions, options_list
+                )
             except Exception as e:
                 print(f"[BATCH GENERATE FAILED] {e} -- falling back per-item")
-                hyps_list = [
-                    generator.fallback(q, o)
-                    for q, o in zip(questions, options_list)
+                batch_out = [
+                    ([generator.fallback(q, o) for o in options],
+                     [True] * len(options))
+                    for q, options in zip(questions, options_list)
                 ]
 
-            all_hyp_texts = [h for hyps in hyps_list for h in hyps]
+            all_hyp_texts = [h for hyps, _ in batch_out for h in hyps]
             all_opt_texts = [o for options in options_list for o in options]
 
             H_all = encoder.encode(all_hyp_texts)
             O_all = encoder.encode(all_opt_texts)
+            Q_all = encoder.encode(questions)
 
             h_off = 0
             o_off = 0
 
-            for (raw_idx, stem, options, y), hyps in zip(pending, hyps_list):
+            for qi, ((raw_idx, stem, options, y), (hyps, flags)) in enumerate(
+                zip(pending, batch_out)
+            ):
 
                 h_len = len(hyps)
                 o_len = len(options)
@@ -175,7 +204,11 @@ class QAIRDataset(Dataset):
 
                     "hypotheses": hyps,
 
+                    "is_fallback": torch.tensor(flags, dtype=torch.bool),
+
                     "option_index": list(range(len(options))),
+
+                    "Q": Q_all[qi].cpu(),
 
                     "H": H.cpu(),
 
@@ -196,22 +229,7 @@ class QAIRDataset(Dataset):
 
                 if count % 50 == 0:
 
-                    cache = {
-
-                        "samples": self.samples,
-
-                        "raw_index": last_raw_index,
-
-                        "complete": False,
-
-                        "encoder": EMBEDDING_MODEL,
-
-                        "generator": LLM_NAME,
-
-                        "version": 32,
-                    }
-
-                    torch.save(cache, cache_path)
+                    self._save(cache_path, last_raw_index, complete=False)
 
                     print(f"[AUTOSAVE] {count} samples "
                           f"(raw_index={last_raw_index})")
@@ -314,22 +332,7 @@ class QAIRDataset(Dataset):
 
         finished_full_split = (max_samples is None)
 
-        cache = {
-
-            "samples": self.samples,
-
-            "raw_index": last_raw_index,
-
-            "complete": finished_full_split,
-
-            "encoder": EMBEDDING_MODEL,
-
-            "generator": LLM_NAME,
-
-            "version": 32,
-        }
-
-        torch.save(cache, cache_path)
+        self._save(cache_path, last_raw_index, complete=finished_full_split)
 
         elapsed = (time.time() - start_time) / 60
 
@@ -338,6 +341,112 @@ class QAIRDataset(Dataset):
         print(f"[TOTAL SAMPLES] {len(self.samples)}")
 
         print(f"[BUILD TIME] {elapsed:.2f} min")
+
+        self.report_quality(split)
+
+    # ========================================================
+    # SAVE / MIGRATE / REPORT
+    # ========================================================
+
+    def _save(self, cache_path, raw_index, complete):
+
+        torch.save(
+            {
+                "samples": self.samples,
+                "raw_index": raw_index,
+                "complete": complete,
+                "encoder": EMBEDDING_MODEL,
+                "generator": LLM_NAME,
+                "version": CACHE_VERSION,
+            },
+            cache_path,
+        )
+
+    def _migrate(self, cache_path, meta):
+        """
+        Bring a pre-v33 cache forward in place.
+
+        Only the question embedding can be recovered without the LLM, and
+        it is by far the most valuable field, so this runs automatically.
+        Hypothesis quality CANNOT be repaired by migration -- that needs
+        regeneration. report_quality() will tell you if you need it.
+        """
+
+        needs_q = "Q" not in self.samples[0]
+        needs_flags = "is_fallback" not in self.samples[0]
+
+        if not (needs_q or needs_flags):
+            return
+
+        if needs_q:
+
+            print("[CACHE MIGRATE] Adding question embeddings (encoder only, "
+                  "no LLM needed)...")
+
+            encoder = HypothesisEncoder()
+
+            texts = [s["question"] for s in self.samples]
+
+            embeddings = []
+
+            for i in tqdm(range(0, len(texts), 128), desc="Encoding questions"):
+                embeddings.append(encoder.encode(texts[i:i + 128]).cpu())
+
+            embeddings = torch.cat(embeddings)
+
+            for s, q in zip(self.samples, embeddings):
+                s["Q"] = q
+
+        if needs_flags:
+
+            # Detect the old template fallback so downstream code can mask
+            # these even on a legacy cache.
+            import re
+
+            pattern = re.compile(r"correctly explains the .* in the question\.$")
+
+            for s in self.samples:
+                s["is_fallback"] = torch.tensor(
+                    [bool(pattern.search(h.strip())) for h in s["hypotheses"]],
+                    dtype=torch.bool,
+                )
+
+        self._save(cache_path, meta.get("raw_index", 0), complete=True)
+
+        print(f"[CACHE MIGRATED] {cache_path} -> version {CACHE_VERSION}")
+
+    def report_quality(self, split):
+        """
+        Print the hypothesis-quality numbers that the audit had to
+        reverse-engineer from the cache by hand. If the fallback rate is
+        high, the hypotheses carry little signal and no amount of
+        architecture will help -- regenerate instead.
+        """
+
+        if not self.samples or "is_fallback" not in self.samples[0]:
+            return
+
+        flags = torch.cat([s["is_fallback"] for s in self.samples])
+
+        total = flags.numel()
+        n_fb = int(flags.sum())
+
+        per_sample = torch.tensor(
+            [int(s["is_fallback"].all()) for s in self.samples]
+        )
+
+        print(
+            f"[CACHE QUALITY {split}] fallback hypotheses "
+            f"{n_fb}/{total} = {100 * n_fb / max(total, 1):.1f}%   "
+            f"fully-fallback samples {int(per_sample.sum())}/{len(self.samples)}"
+        )
+
+        if n_fb / max(total, 1) > 0.10:
+            print(
+                "[CACHE QUALITY WARNING] >10% of hypotheses are fallbacks. "
+                "These carry no information about which option is correct. "
+                "Delete this cache and rebuild with the current generator."
+            )
 
     def __len__(self):
 
@@ -354,6 +463,12 @@ def collate_fn(batch, shuffle_options=True):
     hypothesis) order so the model can't learn positional shortcuts from
     the small dataset. Pass shuffle_options=False for validation/eval so
     metrics are stable and reproducible.
+
+    Ragged option/hypothesis counts (ARC has a handful of 3- and
+    5-option questions) are zero-padded, and the masks below say which
+    entries are real. Those masks used to be computed here and then
+    never passed to the model, so a zero-padded option participated in
+    every reduction and could be returned as the prediction.
     """
 
     max_h = max(x["H"].shape[0] for x in batch)
@@ -364,15 +479,21 @@ def collate_fn(batch, shuffle_options=True):
 
     Hs = []
     Os = []
+    Qs = []
     ys = []
     H_masks = []
     O_masks = []
+    fallbacks = []
 
     for sample in batch:
 
         H = sample["H"]
         O = sample["O"]
         y = sample["y"]
+
+        fb = sample.get(
+            "is_fallback", torch.zeros(H.shape[0], dtype=torch.bool)
+        )
 
         if shuffle_options:
 
@@ -384,18 +505,22 @@ def collate_fn(batch, shuffle_options=True):
 
             if H.shape[0] == n:
                 H = H[perm]
+                fb = fb[perm]
 
             y = int((perm == y).nonzero(as_tuple=True)[0].item())
 
         h_len = H.shape[0]
         o_len = O.shape[0]
 
-        H_mask = H.new_zeros(max_h, dtype=torch.bool)
+        H_mask = torch.zeros(max_h, dtype=torch.bool)
 
-        O_mask = O.new_zeros(max_o, dtype=torch.bool)
+        O_mask = torch.zeros(max_o, dtype=torch.bool)
 
         H_mask[:h_len] = True
         O_mask[:o_len] = True
+
+        fb_pad = torch.zeros(max_h, dtype=torch.bool)
+        fb_pad[:h_len] = fb
 
         if H.shape[0] < max_h:
 
@@ -411,15 +536,19 @@ def collate_fn(batch, shuffle_options=True):
 
         Hs.append(H)
         Os.append(O)
+        Qs.append(sample["Q"] if "Q" in sample else torch.zeros(dim))
 
         ys.append(y)
         H_masks.append(H_mask)
         O_masks.append(O_mask)
+        fallbacks.append(fb_pad)
 
     return {
         "H": torch.stack(Hs),
         "O": torch.stack(Os),
+        "Q": torch.stack(Qs),
         "H_mask": torch.stack(H_masks),
         "O_mask": torch.stack(O_masks),
+        "is_fallback": torch.stack(fallbacks),
         "y": torch.tensor(ys, dtype=torch.long),
     }

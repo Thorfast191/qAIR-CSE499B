@@ -27,7 +27,7 @@ class ClassicalControlLayer(nn.Module):
     percent either way -- see the printed counts below.
     """
 
-    def __init__(self, dim, n_qubits=6, n_layers=3):
+    def __init__(self, dim, n_qubits=6, n_layers=3, verbose=False):
 
         super().__init__()
 
@@ -84,12 +84,15 @@ class ClassicalControlLayer(nn.Module):
 
         self.norm = nn.LayerNorm(dim)
 
-        total_params = sum(p.numel() for p in self.parameters())
-        transform_params = sum(p.numel() for p in self.classical_transform.parameters())
-        print(
-            f"[ClassicalControlLayer] total parameters: {total_params:,} "
-            f"(classical_transform slot: {transform_params:,})"
-        )
+        if verbose:
+            total_params = sum(p.numel() for p in self.parameters())
+            transform_params = sum(
+                p.numel() for p in self.classical_transform.parameters()
+            )
+            print(
+                f"[ClassicalControlLayer] total parameters: {total_params:,} "
+                f"(classical_transform slot: {transform_params:,})"
+            )
 
     def forward(self, H):
 

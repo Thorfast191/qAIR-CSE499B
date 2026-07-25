@@ -47,7 +47,10 @@ def load_or_resume(trainer, ckpt_dir, name, epochs):
 
     print(f"Resuming from epoch {start_epoch}")
 
-    history_path = os.path.join(ckpt_dir, "history.pt")
+    # Per-run history. This used to read a single shared "history.pt",
+    # which every ablation config overwrote in turn -- so a resumed run
+    # could be handed a different config's curves.
+    history_path = os.path.join(ckpt_dir, f"{name}_history.pt")
     if os.path.exists(history_path):
         try:
             resumed_history = torch.load(history_path, map_location="cpu")

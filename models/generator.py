@@ -1,10 +1,46 @@
 """
-IMPROVED GENERATOR (Optional upgrade)
-Changes:
-1. Better prompt engineering with clearer instructions
-2. Fallback hypotheses improved to provide more signal
-3. Output validation and quality checks
-4. Better parsing for output lines
+Hypothesis generator.
+
+Rewritten after the audit. The previous design asked the LLM for all N
+hypotheses in ONE completion and then split the reply on newlines. Three
+things went wrong with that, measured on the shipped cache:
+
+1. `max_new_tokens=96` could not hold 4 hypotheses of the requested
+   15-25 words (~80-130 tokens). Generation truncated and the tail
+   hypotheses never arrived.
+
+2. The line parser rejected any line containing "question", "answer",
+   "generate" or "hypothesis" -- words that appear constantly in
+   legitimate science explanations -- discarding valid output.
+
+3. Whatever was missing got silently replaced by a template fallback,
+   `f"{option} correctly explains the {concept} in the question."`,
+   which embeds the option text verbatim. 33.1% of train and 33.6% of
+   validation hypotheses were this template; 315 train samples were
+   100% template. Those samples are provably uninformative: every option
+   receives an identically-structured string.
+
+Worse than the rate was the ALIGNMENT. Splitting a free-form completion
+on newlines does not guarantee that line k describes option k. Real
+example from the shipped cache -- the model emitted "**option**" and
+"explanation" as separate lines, shifting the whole correspondence:
+
+    [0] OPT 'The refrigerator door is smooth.'
+        HYP '**The refrigerator door is smooth**'          <- echo of opt 0
+    [1] OPT 'The refrigerator door contains iron.'  (correct)
+        HYP 'Smooth surfaces tend to attract magnetic...'  <- about opt 0
+    [2] OPT 'The refrigerator door is a good conductor.'
+        HYP '**The refrigerator door contains iron**'      <- echo of opt 1
+
+The whole architecture assumes hypothesis k belongs to option k
+(collate_fn even permutes H and O jointly to preserve it). Zero-shot
+argmax diag(H . O) on that cache scored 0.2670 -- chance.
+
+The fix is structural, not a better parser: generate ONE hypothesis per
+(question, option) pair in its own completion. Alignment is then
+guaranteed by construction and cannot silently drift. Fallbacks are
+still possible but are now flagged (`is_fallback`) rather than silently
+mixed in, so downstream code can mask or drop them.
 """
 
 import re
@@ -12,10 +48,11 @@ import torch
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from config import resolve_device
+from config import resolve_device, GEN_MAX_NEW_TOKENS, GEN_TEMPERATURE
 
-# Current model - reasonable for now, but could upgrade to larger model if resources allow
 LLM_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
+
+SYSTEM_PROMPT = "You are an expert scientific reasoning system."
 
 
 class HypothesisGenerator:
@@ -65,285 +102,172 @@ class HypothesisGenerator:
         self.model.eval()
 
     # ==========================================================
-    # IMPROVED PROMPT
+    # PROMPT -- one option at a time
     # ==========================================================
 
-    def build_prompt(self, question, options):
-        """
-        Improved prompt with clearer structure and examples.
-        """
+    def build_prompt(self, question, option):
 
-        option_block = "\n".join(
+        return (
+            f"Question: {question}\n"
+            f"Proposed answer: {option}\n\n"
+            "In ONE sentence of 15-30 words, state the scientific reasoning that "
+            "would make this proposed answer correct. Explain the mechanism. "
+            "Do not restate the answer, do not mention other options, and do not "
+            "say whether it is right or wrong.\n\n"
+            "Reasoning:"
+        )
+
+    def _chat(self, prompt):
+
+        return self.tokenizer.apply_chat_template(
             [
-                f"{chr(65+i)}. {opt}"
-                for i, opt in enumerate(options)
-            ]
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            tokenize=False,
+            add_generation_prompt=True,
         )
 
-        return f"""You are a scientific reasoning expert. For each answer choice below, 
-generate ONE short hypothesis explaining the key reasoning that makes that answer correct.
-
-Question:
-{question}
-
-Answer Choices:
-{option_block}
-
-Generate exactly {len(options)} hypotheses - one for each answer choice above.
-Each hypothesis should:
-- Be 15-25 words long
-- Explain the main reasoning mechanism
-- Be scientifically plausible
-- NOT include answer labels
-
-Output format: Write each hypothesis on a new line, in order (hypothesis for A, then B, then C, etc.)
-
-Hypotheses:"""
-
     # ==========================================================
-    # IMPROVED PARSER
+    # PARSER -- one hypothesis from one completion
     # ==========================================================
 
-    def parse_output(self, text, expected):
+    def parse_one(self, text):
         """
-        Improved parsing that's more robust to formatting variations.
+        Returns a cleaned hypothesis string, or None if the completion
+        produced nothing usable. Deliberately does NOT filter on content
+        words: the previous keyword blocklist ("question", "answer",
+        "generate", "hypothesis") threw away correct science.
         """
 
-        hypotheses = []
+        text = text.strip()
 
-        for line in text.split("\n"):
+        # Drop a leading bullet/enumerator/label if present.
+        text = re.sub(r"^\s*(?:[-*•]|\(?[A-Za-z0-9]{1,3}[\.\)\:])\s*", "", text)
 
-            line = line.strip()
+        # Strip surrounding markdown emphasis.
+        text = re.sub(r"[*_`]+", "", text)
 
-            if not line:
-                continue
+        # Keep the first sentence-ish chunk; the prompt asks for one
+        # sentence but small models often keep going.
+        text = text.split("\n")[0].strip()
 
-            # Remove common markers at start (up to 3 chars)
-            line = re.sub(
-                r"^[A-Za-z0-9]{0,3}[\.\)\:\-\•\*]\s*",
-                "",
-                line,
-            )
+        if not text:
+            return None
 
-            # Remove trailing markers
-            line = re.sub(r"\s*[\.\)\:]\s*$", "", line)
+        words = text.split()
 
-            line = line.strip()
+        if len(words) < 5:
+            return None
 
-            # Only accept lines with reasonable length (10-100 words)
-            word_count = len(line.split())
-            if word_count < 5 or word_count > 100:
-                continue
+        if len(words) > 60:
+            text = " ".join(words[:60])
 
-            # Skip lines that look like instructions
-            if any(skip in line.lower() for skip in ["question", "answer", "generate", "hypothesis"]):
-                continue
-
-            hypotheses.append(line)
-
-        return hypotheses[:expected]
+        return text.strip()
 
     # ==========================================================
-    # IMPROVED FALLBACK (more informative)
+    # FALLBACK
     # ==========================================================
 
-    def fallback(self, question, options):
+    def fallback(self, question, option):
         """
-        Better fallback that provides more signal than generic placeholder.
+        Used only when the model returns nothing usable for this option.
+        Callers get an is_fallback flag alongside so these can be masked
+        or dropped rather than silently treated as real hypotheses.
+
+        Deliberately does NOT embed the option text. The old fallback
+        did, which made it maximally cosine-similar to its own option --
+        exactly the signal the selector keys on, so the noise looked like
+        signal.
         """
 
-        hyps = []
-
-        for i, option in enumerate(options):
-            # Create semi-reasonable fallback that relates to the question/option
-            if len(question) > 50:
-                concept = question[:30].split()[-1] if question.split() else "concept"
-            else:
-                concept = "this reasoning"
-            
-            hyp = f"{option} correctly explains the {concept} in the question."
-            hyps.append(hyp)
-
-        return hyps
+        return "No supporting reasoning was produced for this option."
 
     # ==========================================================
-    # QUALITY CHECK
-    # ==========================================================
-
-    def is_valid_hypothesis(self, hyp):
-        """
-        Check if a hypothesis has reasonable quality.
-        """
-        if not hyp or len(hyp) < 8:
-            return False
-        
-        # Check it's not just a copy of the option
-        if hyp.lower().count("hypothesis") > 0:
-            return False
-        
-        # Check reasonable length
-        word_count = len(hyp.split())
-        if word_count < 5 or word_count > 100:
-            return False
-        
-        return True
-
-    # ==========================================================
-    # SHARED POST-PROCESSING (parse -> fallback-pad -> quality check)
-    # ==========================================================
-
-    def _postprocess(self, question, options, decoded):
-
-        hypotheses = self.parse_output(
-            decoded,
-            len(options),
-        )
-
-        # Fallback for insufficient hypotheses
-        if len(hypotheses) < len(options):
-
-            fallback = self.fallback(
-                question,
-                options,
-            )
-
-            while len(hypotheses) < len(options):
-                hyp_idx = len(hypotheses)
-                hypotheses.append(fallback[hyp_idx])
-
-        # Quality validation
-        final_hyps = []
-        for hyp in hypotheses[:len(options)]:
-            if self.is_valid_hypothesis(hyp):
-                final_hyps.append(hyp)
-            else:
-                # Use fallback for this option
-                final_hyps.append(
-                    self.fallback(question, options)[len(final_hyps)]
-                )
-
-        return final_hyps[:len(options)]
-
-    # ==========================================================
-    # GENERATE (single question)
+    # GENERATE (single question, all its options)
     # ==========================================================
 
     @torch.no_grad()
     def generate(self, question, options):
 
-        prompt = self.build_prompt(
-            question,
-            options,
-        )
+        hyps, _ = self.generate_with_flags(question, options)
 
-        messages = [
-            {
-                "role": "system",
-                "content": "You are an expert scientific reasoning system.",
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ]
+        return hyps
 
-        text = self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
+    @torch.no_grad()
+    def generate_with_flags(self, question, options):
 
-        inputs = self.tokenizer(
-            text,
-            return_tensors="pt",
-        ).to(self.device)
+        results = self.generate_batch_with_flags([question], [options])
 
-        outputs = self.model.generate(
-            **inputs,
-            max_new_tokens=96,
-            temperature=0.3,  # Slightly reduced for better quality
-            top_p=0.95,
-            do_sample=True,
-            repetition_penalty=1.10,
-            pad_token_id=self.tokenizer.eos_token_id,
-        )
-
-        generated = outputs[0][inputs["input_ids"].shape[1]:]
-
-        decoded = self.tokenizer.decode(
-            generated,
-            skip_special_tokens=True,
-        )
-
-        return self._postprocess(question, options, decoded)
+        return results[0]
 
     # ==========================================================
-    # GENERATE (batched) -- same prompt/parsing/fallback logic as
-    # generate(), but runs one model.generate() call for a whole list
-    # of questions instead of one call per question. This is what
-    # training/dataset.py uses to build the cache -- it's the only
-    # thing that makes hypothesis generation batch-friendly, since
-    # generate() alone processes one example at a time.
+    # GENERATE (batched across questions AND options)
+    #
+    # Every (question, option) pair becomes its own prompt; the flat
+    # list is batched through one model.generate() call and then
+    # regrouped. Alignment is positional and cannot drift.
     # ==========================================================
 
     @torch.no_grad()
     def generate_batch(self, questions, options_list):
 
-        prompts = [
-            self.build_prompt(q, opts)
-            for q, opts in zip(questions, options_list)
+        return [
+            hyps
+            for hyps, _ in self.generate_batch_with_flags(questions, options_list)
         ]
 
-        texts = [
-            self.tokenizer.apply_chat_template(
-                [
-                    {
-                        "role": "system",
-                        "content": "You are an expert scientific reasoning system.",
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    },
-                ],
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-            for prompt in prompts
-        ]
+    @torch.no_grad()
+    def generate_batch_with_flags(self, questions, options_list):
+        """
+        Returns a list of (hypotheses, is_fallback_flags) tuples, one per
+        input question, with len(hypotheses) == len(options).
+        """
+
+        flat_prompts = []
+        owners = []
+
+        for qi, (question, options) in enumerate(zip(questions, options_list)):
+            for option in options:
+                flat_prompts.append(self._chat(self.build_prompt(question, option)))
+                owners.append((qi, option))
 
         inputs = self.tokenizer(
-            texts,
+            flat_prompts,
             return_tensors="pt",
             padding=True,
         ).to(self.device)
 
         outputs = self.model.generate(
             **inputs,
-            max_new_tokens=96,
-            temperature=0.3,
+            max_new_tokens=GEN_MAX_NEW_TOKENS,
+            temperature=GEN_TEMPERATURE,
             top_p=0.95,
             do_sample=True,
             repetition_penalty=1.10,
             pad_token_id=self.tokenizer.eos_token_id,
         )
 
-        # Left-padding means every sample's prompt occupies the same
-        # number of columns, so the generated continuation always starts
-        # at this same offset for every row in the batch.
         input_len = inputs["input_ids"].shape[1]
 
-        results = []
+        results = [([], []) for _ in questions]
 
-        for i, (question, options) in enumerate(zip(questions, options_list)):
-
-            generated = outputs[i][input_len:]
+        for i, (qi, option) in enumerate(owners):
 
             decoded = self.tokenizer.decode(
-                generated,
+                outputs[i][input_len:],
                 skip_special_tokens=True,
             )
 
-            results.append(self._postprocess(question, options, decoded))
+            hyp = self.parse_one(decoded)
+
+            if hyp is None:
+                hyp = self.fallback(questions[qi], option)
+                is_fallback = True
+            else:
+                is_fallback = False
+
+            results[qi][0].append(hyp)
+            results[qi][1].append(is_fallback)
 
         return results

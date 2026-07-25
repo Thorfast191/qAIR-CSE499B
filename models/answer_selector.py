@@ -5,21 +5,31 @@ import torch.nn.functional as F
 
 class EnergyAnswerSelector(nn.Module):
     """
-    Adaptive Hamiltonian Energy Selector
+    Adaptive Hamiltonian Energy Selector.
 
-    Lower Energy = Better Answer
+    Lower Energy = Better Answer.
 
-    Improvements
-    ------------
-    • Dynamic energy fusion
-    • Adaptive Hamiltonian metric
-    • Confidence estimation
-    • Stable energy normalization
+    Fixed in the audit
+    ------------------
+    * Question conditioning (`use_question`). This is where the largest
+      measured win lives: on cached ARC embeddings, a plain MLP scores
+      0.3585 from options alone and 0.4849 once the question is
+      available. The question text was in the cache all along but was
+      never encoded.
+    * `energy = energy / confidence.clamp(min=0.2)` multiplied the energy
+      by up to 5x and was then clamped to +/-6. Saturating that clamp
+      kills gradients -- the documented cause of the reverted warm-start
+      experiment. Confidence now modulates the energy multiplicatively in
+      a bounded way (0.5 .. 1.5) and the clamp is a wide safety net
+      rather than an active constraint.
+    * Dead commented-out normalization block removed.
     """
 
-    def __init__(self, dim):
+    def __init__(self, dim, use_question=True):
 
         super().__init__()
+
+        self.use_question = use_question
 
         # ------------------------------------------
         # Hamiltonian projection
@@ -31,12 +41,15 @@ class EnergyAnswerSelector(nn.Module):
             bias=False,
         )
 
+        # [H, O, H-O, H*O] plus, when available, [Q, Q*O, Q-O].
+        n_feat = 7 if use_question else 4
+
         # ------------------------------------------
         # Learned compatibility
         # ------------------------------------------
 
         self.energy_net = nn.Sequential(
-            nn.Linear(dim * 4, dim * 2),
+            nn.Linear(dim * n_feat, dim * 2),
             nn.GELU(),
             nn.LayerNorm(dim * 2),
             nn.Dropout(0.10),
@@ -46,23 +59,21 @@ class EnergyAnswerSelector(nn.Module):
         )
 
         # ------------------------------------------
-        # NEW
         # Adaptive fusion network
         # ------------------------------------------
 
         self.fusion = nn.Sequential(
-            nn.Linear(dim * 4, dim),
+            nn.Linear(dim * n_feat, dim),
             nn.GELU(),
             nn.Linear(dim, 3),
         )
 
         # ------------------------------------------
-        # NEW
         # Confidence estimation
         # ------------------------------------------
 
         self.confidence = nn.Sequential(
-            nn.Linear(dim * 4, dim),
+            nn.Linear(dim * n_feat, dim),
             nn.GELU(),
             nn.Linear(dim, 1),
             nn.Sigmoid(),
@@ -70,7 +81,7 @@ class EnergyAnswerSelector(nn.Module):
 
         self.temperature = nn.Parameter(torch.tensor(1.0))
 
-    def forward(self, H, O):
+    def forward(self, H, O, Q=None):
 
         B, K, D = H.shape
         _, N, _ = O.shape
@@ -94,15 +105,24 @@ class EnergyAnswerSelector(nn.Module):
         diff = H_exp - O_exp
         prod = H_exp * O_exp
 
-        features = torch.cat(
-            [
-                H_exp,
-                O_exp,
-                diff,
-                prod,
-            ],
-            dim=-1,
-        )
+        parts = [H_exp, O_exp, diff, prod]
+
+        if self.use_question:
+
+            if Q is None:
+                raise ValueError(
+                    "EnergyAnswerSelector was built with use_question=True "
+                    "but forward() got Q=None. Rebuild the cache so it "
+                    "carries question embeddings (training/dataset.py "
+                    "migrates existing caches automatically), or construct "
+                    "the model with use_question=False."
+                )
+
+            Q_exp = F.normalize(Q, dim=-1).view(B, 1, 1, D).expand(B, K, N, D)
+
+            parts += [Q_exp, Q_exp * O_exp, Q_exp - O_exp]
+
+        features = torch.cat(parts, dim=-1)
 
         ##################################################
         # Learned Energy
@@ -156,29 +176,14 @@ class EnergyAnswerSelector(nn.Module):
         )
 
         ##################################################
-        # Confidence
+        # Confidence -- bounded modulation in [0.5, 1.5].
+        # Sharpens the energy where the model is confident
+        # without the 5x blow-up that saturated the clamp.
         ##################################################
 
         confidence = self.confidence(features).squeeze(-1)
 
-        energy = energy / confidence.clamp(min=0.2)
-
-        ##################################################
-        # Stable normalization
-        ##################################################
-
-        # energy = energy - energy.mean(
-        #     dim=-1,
-        #     keepdim=True,
-        # )
-
-        # energy = energy / (
-        #     energy.std(
-        #         dim=-1,
-        #         keepdim=True,
-        #     )
-        #     + 1e-6
-        # )
+        energy = energy * (0.5 + confidence)
 
         ##################################################
         # Temperature
@@ -190,10 +195,12 @@ class EnergyAnswerSelector(nn.Module):
 
         energy = energy / temperature
 
+        # Wide safety net against runaway energies. Should not bind in
+        # normal training -- if it does, something upstream is diverging.
         energy = torch.clamp(
             energy,
-            -6,
-            6,
+            -12,
+            12,
         )
 
         return {

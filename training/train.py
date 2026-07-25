@@ -1,12 +1,3 @@
-"""
-FIXED TRAINING CONFIGURATION
-Changes:
-1. Increased base_params LR from 1e-4 to 5e-4
-2. Increased new_params LR from 3e-5 to 2e-4
-3. Fixed optimizer betas from (0.9, 0.98) to (0.9, 0.999) - standard values
-4. These changes provide better gradient flow and faster convergence
-"""
-
 import os
 import torch
 
@@ -21,7 +12,17 @@ from training.evaluate import evaluate
 
 class Trainer:
 
-    def __init__(self, model, train_loader, val_loader, device, ckpt_dir, name, weight_decay=WEIGHT_DECAY):
+    def __init__(
+        self,
+        model,
+        train_loader,
+        val_loader,
+        device,
+        ckpt_dir,
+        name,
+        weight_decay=WEIGHT_DECAY,
+        verbose=False,
+    ):
 
         self.model = model
 
@@ -33,10 +34,12 @@ class Trainer:
         self.ckpt_dir = ckpt_dir
         self.name = name
 
+        self.verbose = verbose
+
         os.makedirs(ckpt_dir, exist_ok=True)
 
         # =====================================================
-        # PARAMETER GROUPS WITH IMPROVED LEARNING RATES
+        # PARAMETER GROUPS
         # =====================================================
 
         new_params, base_params = [], []
@@ -50,8 +53,6 @@ class Trainer:
         if len(new_params) > 0:
             param_groups.append({"params": new_params, "lr": NEW_LR})
 
-        # FIXED: Using standard AdamW betas (0.9, 0.999) instead of (0.9, 0.98)
-        # Standard betas provide better second moment averaging
         self.optim = torch.optim.AdamW(
             param_groups, weight_decay=weight_decay, betas=(0.9, 0.999)
         )
@@ -65,6 +66,19 @@ class Trainer:
         )
 
         self.scheduler = None
+
+    # =====================================================
+    # PATHS -- per-run, never shared
+    # =====================================================
+
+    def history_path(self):
+        """
+        Every ablation config used to write ckpt_dir/history.pt with no
+        run name, so seven configs clobbered one file and `load_or_resume`
+        would hand a run some other run's curves. History is per-run now.
+        """
+
+        return os.path.join(self.ckpt_dir, f"{self.name}_history.pt")
 
     # =====================================================
     # SAVE CHECKPOINT
@@ -96,7 +110,7 @@ class Trainer:
 
     def save_history(self, history):
 
-        torch.save(history, os.path.join(self.ckpt_dir, "history.pt"))
+        torch.save(history, self.history_path())
 
     # =====================================================
     # TRAIN
@@ -120,13 +134,14 @@ class Trainer:
             "diversity": [],
             "spread": [],
             "collapse_peak": [],
+            "pairwise_cos": [],
+            "h_cos": [],
         }
 
         epochs_no_improve = 0
 
         for epoch in range(start_epoch, epochs):
 
-            printed_energy = False
             self.model.train()
 
             total_loss = 0.0
@@ -139,10 +154,11 @@ class Trainer:
             for batch in pbar:
 
                 H = batch["H"].to(self.device)
-
                 O = batch["O"].to(self.device)
-
+                Q = batch["Q"].to(self.device)
                 y = batch["y"].to(self.device)
+                H_mask = batch["H_mask"].to(self.device)
+                O_mask = batch["O_mask"].to(self.device)
 
                 self.optim.zero_grad(set_to_none=True)
 
@@ -152,48 +168,14 @@ class Trainer:
                 # fallback for CPU/MPS runs (autocast stays disabled there).
                 autocast_device_type = "cuda" if self.device == "cuda" else "cpu"
 
-                with autocast(device_type=autocast_device_type, enabled=(self.device == "cuda")):
-                    outputs = self.model(H, O, y)
+                with autocast(
+                    device_type=autocast_device_type,
+                    enabled=(self.device == "cuda"),
+                ):
+                    outputs = self.model(
+                        H, O, Q=Q, y=y, H_mask=H_mask, O_mask=O_mask
+                    )
                     loss = compute_loss(outputs, y)
-
-                if epoch == 0 and total_loss == 0:
-
-                    print(f"\n========== DEBUG [{self.name}] ==========")
-                    print("\nScores:")
-                    print(outputs["scores"][0])
-                    print("\nAnswer Energy:")
-                    print(outputs["answer_energy"][0])
-                    print("\nCollapse Probs:")
-                    print(outputs["collapse_probs"][0])
-                    print("\nCollapse Energy:")
-                    print(outputs["collapse_energy"][0])
-                    print("\nLoss:", loss.item())
-
-                if outputs.get("validator") is not None and not printed_energy:
-
-                    energy = outputs["validator_potential"]
-
-                    print(
-                        f"\n[{self.name}][validator_potential] "
-                        f"mean={energy.mean().item():.4f} "
-                        f"max={energy.max().item():.4f} "
-                        f"min={energy.min().item():.4f}"
-                    )
-                    print(
-                        f"[{self.name}][Collapse Peak] "
-                        f"{outputs['collapse_probs'].max(dim=1)[0].mean().item():.4f}"
-                    )
-                    entropy = (
-                        -(
-                            outputs["collapse_probs"]
-                            * torch.log(outputs["collapse_probs"] + 1e-8)
-                        )
-                        .sum(dim=1)
-                        .mean()
-                    )
-                    print(f"[{self.name}][Collapse Entropy] " f"{entropy.item():.4f}")
-
-                    printed_energy = True
 
                 self.scaler.scale(loss).backward()
                 self.scaler.unscale_(self.optim)
@@ -209,33 +191,56 @@ class Trainer:
             metrics = evaluate(self.model, self.val_loader, self.device)
 
             self.scheduler.step()
-            print(f"[{self.name}] LR: {self.scheduler.get_last_lr()[0]:.6f}")
-
-            # Log quantum/classical fusion balance, if applicable
-            if hasattr(self.model, "fusion"):
-                alpha_val = torch.sigmoid(self.model.fusion.energy_alpha).item()
-                print(
-                    f"[{self.name}] energy_alpha={alpha_val:.4f} "
-                    f"(0=pure quantum, 1=pure classical)"
-                )
 
             history["loss"].append(avg_loss)
-            history["acc"].append(metrics["acc"])
-            history["entropy"].append(metrics["entropy"])
-            history["diversity"].append(metrics["diversity"])
-            history["spread"].append(metrics["spread"])
-            history["collapse_peak"].append(metrics["collapse_peak"])
+            for k in ("acc", "entropy", "diversity", "spread",
+                      "collapse_peak", "pairwise_cos", "h_cos"):
+                history[k].append(metrics[k])
 
             self.save_history(history)
 
             print("\n" + "=" * 60)
-            print(f"[{self.name}] Epoch {epoch+1}/{epochs}")
-            print(f"Train Loss : {avg_loss:.4f}")
-            print(f"Val Acc    : {metrics['acc']:.4f}")
-            print(f"Entropy    : {metrics['entropy']:.4f}")
-            print(f"Diversity  : {metrics['diversity']:.4f}")
-            print(f"Spread     : {metrics['spread']:.4f}")
+            print(f"[{self.name}] Epoch {epoch+1}/{epochs}   "
+                  f"LR {self.scheduler.get_last_lr()[0]:.6f}")
+            print(f"Train Loss    : {avg_loss:.4f}")
+            print(f"Val Acc       : {metrics['acc']:.4f}")
+            print(f"Entropy       : {metrics['entropy']:.4f}")
+            print(f"Diversity     : {metrics['diversity']:.6f}")
             print(f"Collapse Peak : {metrics['collapse_peak']:.4f}")
+            print(f"Pairwise Cos  : {metrics['pairwise_cos']:.4f} (energy rows)")
+            print(f"H Cos         : {metrics['h_cos']:.4f} (hypothesis vectors)")
+
+            if self.verbose and hasattr(self.model, "fusion"):
+                print(
+                    f"energy_alpha={torch.sigmoid(self.model.fusion.energy_alpha).item():.4f} "
+                    f"validator_alpha={torch.sigmoid(self.model.fusion.validator_alpha).item():.4f} "
+                    f"dt={torch.sigmoid(self.model.reasoner.dt).item():.4f} "
+                    f"anchor={torch.sigmoid(self.model.reasoner.anchor_weight).item():.4f}"
+                )
+
+            # The check that would have caught the original failure.
+            if metrics["pairwise_cos"] > 0.99:
+
+                if metrics["h_cos"] > 0.99:
+                    cause = (
+                        "the REASONER has merged the hypotheses into one "
+                        "vector (h_cos={:.4f}) -- an architecture problem"
+                    ).format(metrics["h_cos"])
+                else:
+                    cause = (
+                        "the hypotheses are still distinct (h_cos={:.4f}) but "
+                        "the SELECTOR is ignoring them -- this is what a "
+                        "low-signal cache looks like. Check the fallback rate "
+                        "printed at load and regenerate; do not tune the model"
+                    ).format(metrics["h_cos"])
+
+                print(
+                    f"[{self.name}][COLLAPSE WARNING] pairwise_cos="
+                    f"{metrics['pairwise_cos']:.6f} -- the multi-hypothesis "
+                    f"mechanism is inert and accuracy here reflects option "
+                    f"priors only. Diagnosis: {cause}. Confirm with "
+                    f"evaluation/input_ablation.py."
+                )
 
             if metrics["acc"] > best_acc:
                 best_acc = metrics["acc"]
