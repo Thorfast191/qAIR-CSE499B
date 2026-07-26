@@ -89,10 +89,20 @@ FEATURES = {
 }
 
 
-def run_probes(cache_dir, epochs=60, lr=3e-3):
+def run_probes(cache_dir, epochs=60, lr=3e-3,
+               train_samples=None, val_samples=None):
+    """
+    train_samples/val_samples MUST match whatever cap the cache was built
+    with. A cache built with max_samples is stored complete=False by
+    design (so a later full build can resume and finish the split), which
+    means calling QAIRDataset with max_samples=None against it does not
+    read 800 samples -- it starts generating the other 2570.
+    """
 
-    tr = _stack(QAIRDataset(split="train", cache_dir=cache_dir))
-    va = _stack(QAIRDataset(split="validation", cache_dir=cache_dir))
+    tr = _stack(QAIRDataset(
+        split="train", max_samples=train_samples, cache_dir=cache_dir))
+    va = _stack(QAIRDataset(
+        split="validation", max_samples=val_samples, cache_dir=cache_dir))
 
     print(f"\ntrain={tr[3].numel()}  val={va[3].numel()}  chance=0.2500")
     print("\n=== DATA CEILING (probes on cached embeddings) ===")
@@ -133,7 +143,7 @@ def run_probes(cache_dir, epochs=60, lr=3e-3):
 # ==========================================================
 
 @torch.no_grad()
-def run_direct(cache_dir, split="validation", limit=None):
+def run_direct(cache_dir, split="validation", limit=None, max_samples=None):
     """
     Scores each option by its mean token log-likelihood under the same
     LLM used for hypothesis generation, conditioned on the question.
@@ -155,7 +165,10 @@ def run_direct(cache_dir, split="validation", limit=None):
     ).to(device)
     lm.eval()
 
-    ds = QAIRDataset(split=split, cache_dir=cache_dir)
+    # max_samples must match the cap the cache was built with -- see the
+    # note on run_probes. `limit` is a separate knob: how many of the
+    # loaded samples to actually score, for a quick read.
+    ds = QAIRDataset(split=split, max_samples=max_samples, cache_dir=cache_dir)
 
     samples = ds.samples[:limit] if limit else ds.samples
 
@@ -211,15 +224,35 @@ def main():
     parser.add_argument("--split", type=str, default="validation")
     parser.add_argument("--cache-dir", type=str, default=CACHE_DIR)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--train-samples", type=int, default=None,
+        help="Must match the cap the train cache was built with.",
+    )
+    parser.add_argument(
+        "--val-samples", type=int, default=None,
+        help="Must match the cap the validation cache was built with.",
+    )
     args = parser.parse_args()
 
     set_seed(0)
 
     if args.mode in ("probe", "all"):
-        run_probes(args.cache_dir)
+        run_probes(
+            args.cache_dir,
+            train_samples=args.train_samples,
+            val_samples=args.val_samples,
+        )
 
     if args.mode in ("direct", "all"):
-        run_direct(args.cache_dir, split=args.split, limit=args.limit)
+        run_direct(
+            args.cache_dir,
+            split=args.split,
+            limit=args.limit,
+            max_samples=(
+                args.val_samples if args.split == "validation"
+                else args.train_samples
+            ),
+        )
 
 
 if __name__ == "__main__":
