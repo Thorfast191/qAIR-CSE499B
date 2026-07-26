@@ -51,10 +51,26 @@ def main():
     )
     parser.add_argument("--cache-dir", default=CACHE_DIR)
     parser.add_argument(
-        "--limit", type=int, default=None,
-        help="Cap samples per split -- for a quick smoke test only.",
+        "--limit", type=int, nargs="+", default=None,
+        help=(
+            "Cap samples per split. One value applies to every split; "
+            "or give one value per split, in the same order as --splits. "
+            "e.g. --splits train validation --limit 800 200"
+        ),
     )
     args = parser.parse_args()
+
+    if args.limit is None:
+        limits = [None] * len(args.splits)
+    elif len(args.limit) == 1:
+        limits = args.limit * len(args.splits)
+    elif len(args.limit) == len(args.splits):
+        limits = args.limit
+    else:
+        parser.error(
+            f"--limit takes 1 value or one per split; got {len(args.limit)} "
+            f"for {len(args.splits)} splits."
+        )
 
     device = resolve_device()
 
@@ -66,12 +82,16 @@ def main():
     print(f"splits    : {', '.join(args.splits)}")
 
     if device == "cpu":
-        # 5.3 s/question measured on 12 cores. Do not use a figure taken
-        # from a short run -- model loading (~40 s) dominates the average
-        # until a few hundred samples in, which inflates it to ~10 s.
-        est = sum(SPLIT_SIZES.get(s, 0) for s in args.splits) * 5.3 / 3600
+        # ~7 s/question observed across a longer run on 12 cores. Do not
+        # take this figure from a short run -- model loading (~40 s)
+        # dominates until a few hundred samples in.
+        n = sum(
+            SPLIT_SIZES.get(s, 0) if lim is None else min(lim, SPLIT_SIZES.get(s, 0))
+            for s, lim in zip(args.splits, limits)
+        )
         print(
-            f"\n[CPU] Estimated ~{est:.1f} h total at ~5.3 s/question.\n"
+            f"\n[CPU] ~{n} questions, estimated ~{n * 7.0 / 3600:.1f} h "
+            f"at ~7 s/question.\n"
             f"      Safe to interrupt -- rerun this exact command to resume.\n"
             f"      A GPU is 20-30x faster if you have one available."
         )
@@ -80,16 +100,16 @@ def main():
 
     started = time.time()
 
-    for split in args.splits:
+    for split, limit in zip(args.splits, limits):
 
         print("\n" + "=" * 66)
-        print(f"SPLIT: {split}")
+        print(f"SPLIT: {split}" + (f"  (limit {limit})" if limit else ""))
         print("=" * 66)
 
         t0 = time.time()
 
         ds = QAIRDataset(
-            split=split, max_samples=args.limit, cache_dir=args.cache_dir
+            split=split, max_samples=limit, cache_dir=args.cache_dir
         )
 
         print(

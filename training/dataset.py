@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import torch
@@ -140,9 +141,18 @@ class QAIRDataset(Dataset):
 
                 if max_samples is not None and len(self.samples) >= max_samples:
                     # Caller wants a capped subset and we already have enough.
+                    #
+                    # NOTE: a cache built with max_samples is stored with
+                    # complete=False, because it does not cover the split.
+                    # That is deliberate -- it lets a later full build
+                    # resume and finish the rest. The consequence is that
+                    # you must keep passing the same cap: calling this with
+                    # max_samples=None against a capped cache will start
+                    # generating the remainder of the split.
                     self.samples = self.samples[:max_samples]
                     print(f"[CACHE TRUNCATED TO max_samples] "
                           f"{len(self.samples)} samples")
+                    self.report_quality(split)
                     return
 
                 if is_complete and max_samples is None:
@@ -161,6 +171,13 @@ class QAIRDataset(Dataset):
         # ====================================================
         # BUILD (or RESUME) CACHE
         # ====================================================
+
+        # Refuse to start if another process is already building this same
+        # cache. Checked here rather than at load time so read-only users
+        # of a COMPLETE cache are never blocked by a stray lock.
+        self._check_lock(cache_path)
+
+        self._touch_lock(cache_path, resume_raw_index)
 
         start_time = time.time()
 
@@ -371,6 +388,8 @@ class QAIRDataset(Dataset):
 
         self._save(cache_path, last_raw_index, complete=finished_full_split)
 
+        self._release_lock(cache_path)
+
         elapsed = (time.time() - start_time) / 60
 
         print(f"[CACHE SAVED] {cache_path} (complete={finished_full_split})")
@@ -403,19 +422,112 @@ class QAIRDataset(Dataset):
 
         tmp_path = cache_path + ".tmp"
 
-        torch.save(
-            {
-                "samples": self.samples,
-                "raw_index": raw_index,
-                "complete": complete,
-                "encoder": EMBEDDING_MODEL,
-                "generator": LLM_NAME,
-                "version": CACHE_VERSION,
-            },
-            tmp_path,
-        )
+        with open(tmp_path, "wb") as f:
+
+            torch.save(
+                {
+                    "samples": self.samples,
+                    "raw_index": raw_index,
+                    "complete": complete,
+                    "encoder": EMBEDDING_MODEL,
+                    "generator": LLM_NAME,
+                    "version": CACHE_VERSION,
+                },
+                f,
+            )
+
+            # os.replace makes the DIRECTORY ENTRY atomic, but on its own
+            # says nothing about whether the file's CONTENTS reached the
+            # platter. Without this fsync a hard power loss could leave a
+            # perfectly valid directory entry pointing at data that was
+            # still sitting in the OS write cache -- the same truncated-
+            # archive symptom, just with a rarer trigger.
+            f.flush()
+            os.fsync(f.fileno())
 
         os.replace(tmp_path, cache_path)
+
+        self._touch_lock(cache_path, raw_index)
+
+    # --------------------------------------------------------
+    # BUILD LOCK
+    #
+    # A cache build takes hours and autosaves as it goes, so the
+    # realistic way to lose work is no longer a truncated write -- it's
+    # TWO builds running against the same file. Both write atomically,
+    # so neither corrupts anything, but they resume from each other's
+    # raw_index and silently clobber each other's progress. That is easy
+    # to trigger by accident: open the notebook while a background build
+    # is running and the dataset cell will happily start a second one.
+    #
+    # Liveness is tracked with a heartbeat timestamp refreshed on every
+    # autosave, NOT by probing the PID. os.kill(pid, 0) is the usual
+    # trick and it is actively dangerous here: on Windows, os.kill with
+    # any signal other than CTRL_C_EVENT/CTRL_BREAK_EVENT calls
+    # TerminateProcess, so a liveness "check" would kill the very build
+    # it was asking about.
+    # --------------------------------------------------------
+
+    LOCK_STALE_SECONDS = 900  # 15 min; autosaves land every ~4 min
+
+    @staticmethod
+    def _lock_path(cache_path):
+        return cache_path + ".lock"
+
+    def _touch_lock(self, cache_path, raw_index):
+
+        try:
+            with open(self._lock_path(cache_path), "w") as f:
+                json.dump(
+                    {
+                        "pid": os.getpid(),
+                        "heartbeat": time.time(),
+                        "raw_index": raw_index,
+                    },
+                    f,
+                )
+        except OSError:
+            # A lock we can't write is not worth failing a 5-hour build over.
+            pass
+
+    def _check_lock(self, cache_path):
+
+        lock_path = self._lock_path(cache_path)
+
+        if not os.path.exists(lock_path):
+            return
+
+        try:
+            with open(lock_path) as f:
+                info = json.load(f)
+        except (OSError, ValueError):
+            return
+
+        age = time.time() - info.get("heartbeat", 0)
+
+        if age > self.LOCK_STALE_SECONDS:
+            print(
+                f"[STALE LOCK] {lock_path} last updated {age / 60:.0f} min ago "
+                f"(pid {info.get('pid')}). Assuming that build died; taking over."
+            )
+            return
+
+        raise RuntimeError(
+            f"\nAnother cache build is already running against {cache_path}.\n"
+            f"  pid          : {info.get('pid')}\n"
+            f"  last autosave: {age / 60:.1f} min ago "
+            f"(raw_index={info.get('raw_index')})\n\n"
+            f"Two builds on one cache overwrite each other's progress and "
+            f"waste hours.\nWait for it to finish, or stop it and delete "
+            f"{lock_path} to take over.\n"
+        )
+
+    def _release_lock(self, cache_path):
+
+        try:
+            os.remove(self._lock_path(cache_path))
+        except OSError:
+            pass
 
     def _migrate(self, cache_path, meta):
         """
