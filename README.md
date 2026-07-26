@@ -558,6 +558,12 @@ Both commands use the defaults in `config.py` (cache/checkpoint directories, bat
 Run these in order. Steps 1 and 2 are cheap and decide whether the rest is worth doing.
 
 ```bash
+# 0. Build the cache. ONE-TIME and slow (~10 h train, ~2.5 h validation on
+#    CPU; 20-30x faster on GPU). Safe to interrupt -- it autosaves every 50
+#    samples and saves are atomic, so rerunning the same command resumes
+#    where it stopped rather than restarting.
+python scripts/build_cache.py --splits train validation
+
 # 1. Establish the ceiling and the baseline you must beat.
 #    Probes are seconds; --mode direct needs the LLM.
 python -m evaluation.baselines --mode all

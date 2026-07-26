@@ -11,6 +11,10 @@ qAIR-vNext: a research prototype that replaces single-path LLM reasoning with pe
 ```bash
 pip install -r requirements.txt
 
+# ONE-TIME, slow (~10 h train / ~2.5 h validation on CPU, 20-30x faster on GPU).
+# Resumable: autosaves every 50 samples, saves are atomic, rerun to resume.
+python scripts/build_cache.py --splits train validation
+
 python main.py --mode train      # single training run (training/runner.py)
 python main.py --mode ablation   # deconfounded grid x config.SEEDS (training/ablations.py)
 
