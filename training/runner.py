@@ -62,14 +62,35 @@ def build_loaders(cache_dir, train_samples=None, val_samples=None,
     test_loader = None
 
     if with_test:
-        test_ds = QAIRDataset(split="test", max_samples=test_samples, cache_dir=cache_dir)
-        test_loader = DataLoader(
-            test_ds,
-            batch_size=BATCH_SIZE,
-            shuffle=False,
-            collate_fn=partial(collate_fn, shuffle_options=False),
-        )
-        print(f"Test Samples  : {len(test_ds)}")
+
+        # Do NOT let a routine `--mode train` silently kick off an
+        # hours-long LLM generation run for a split the user may not have
+        # built yet. ARC's test split is ~3.5k questions; building it from
+        # scratch costs as much as train+validation combined. Skip with a
+        # loud, actionable message instead.
+        test_cache = os.path.join(cache_dir, "arc_test.pt")
+
+        if not os.path.exists(test_cache):
+            print(
+                f"\n[NO TEST CACHE] {test_cache} does not exist.\n"
+                f"  Skipping held-out test evaluation -- validation numbers\n"
+                f"  only, which are optimistically biased because validation\n"
+                f"  also selects the checkpoint.\n"
+                f"  To build it (slow, one-time, needs the LLM):\n"
+                f"      python -c \"from training.dataset import QAIRDataset; \"\n"
+                f"                 \"QAIRDataset(split='test')\"\n"
+            )
+        else:
+            test_ds = QAIRDataset(
+                split="test", max_samples=test_samples, cache_dir=cache_dir
+            )
+            test_loader = DataLoader(
+                test_ds,
+                batch_size=BATCH_SIZE,
+                shuffle=False,
+                collate_fn=partial(collate_fn, shuffle_options=False),
+            )
+            print(f"Test Samples  : {len(test_ds)}")
 
     print(f"Train Samples : {len(train_ds)}")
     print(f"Val Samples   : {len(val_ds)}")

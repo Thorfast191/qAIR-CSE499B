@@ -56,11 +56,19 @@ PATIENCE = 5
 # GEN_BATCH_SIZE * n_options.
 GEN_BATCH_SIZE = 8
 
-# 96 was too small to hold the requested output and silently truncated
-# a third of all hypotheses into template fallbacks -- see the module
-# docstring in models/generator.py. One option per completion now, so
-# this only has to cover a single 15-30 word sentence.
-GEN_MAX_NEW_TOKENS = 96
+# 96 was too small to hold FOUR hypotheses in one completion and silently
+# truncated a third of them into template fallbacks -- see the module
+# docstring in models/generator.py. Since v44 each completion carries a
+# single 15-30 word sentence (~45 tokens at 1.35 tokens/word), so 64 is
+# ~50% headroom and parse_one() truncates at 60 words regardless.
+#
+# This is the main lever on cache-build time. generate() runs until every
+# sequence in the batch hits EOS or this cap, so one rambling sample
+# drags the whole batch to the ceiling -- lowering the cap bounds that
+# directly. Measured ~10.6 s/question on 12 CPU cores at 96 tokens, i.e.
+# ~10 h for the 3370-question train split. Build on a GPU if you have
+# one; this is 20-30x faster there.
+GEN_MAX_NEW_TOKENS = 64
 
 # 0.3 is low for a method whose premise is maintaining DIVERSE
 # hypotheses in superposition.

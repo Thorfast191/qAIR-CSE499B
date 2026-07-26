@@ -56,9 +56,41 @@ class QAIRDataset(Dataset):
 
             print(f"[CACHE FOUND] {cache_path}")
 
-            loaded = torch.load(cache_path, map_location="cpu")
+            try:
+                loaded = torch.load(cache_path, map_location="cpu")
 
-            if isinstance(loaded, dict):
+            except Exception as e:
+                # Almost always a build that was interrupted mid-write by
+                # an older version of _save() (which wrote in place rather
+                # than atomically). The partial file is unreadable and so
+                # cannot be resumed from -- move it aside rather than
+                # delete it, and rebuild, instead of dying with a raw
+                # miniz stack trace.
+                salvage = cache_path + ".corrupt"
+
+                print(
+                    f"\n[CACHE UNREADABLE] {cache_path}\n"
+                    f"  {type(e).__name__}: {e}\n"
+                    f"  This is what a cache build interrupted mid-write "
+                    f"looks like (truncated zip archive).\n"
+                    f"  Moving it to {salvage} and rebuilding from scratch.\n"
+                    f"  Saves are atomic now, so this cannot recur.\n"
+                )
+
+                if os.path.exists(salvage):
+                    os.remove(salvage)
+
+                os.replace(cache_path, salvage)
+
+                loaded = None
+
+            if loaded is None:
+                self.samples = []
+                is_complete = False
+                resume_raw_index = 0
+                version = CACHE_VERSION
+
+            elif isinstance(loaded, dict):
                 self.samples = loaded.get("samples", [])
                 is_complete = loaded.get("complete", False)
                 resume_raw_index = loaded.get("raw_index", 0)
@@ -101,16 +133,21 @@ class QAIRDataset(Dataset):
             if self.samples and is_complete:
                 self._migrate(cache_path, loaded if isinstance(loaded, dict) else {})
 
-            if max_samples is not None:
-                # Caller explicitly wants a capped subset. If we already
-                # have enough, or more than enough, that's fine either way.
-                self.samples = self.samples[:max_samples]
-                print(f"[CACHE TRUNCATED TO max_samples] {len(self.samples)} samples")
-                return
+            # Only the paths below may return early. A cache that failed to
+            # load leaves samples empty, and returning here would hand the
+            # caller a silently EMPTY dataset instead of rebuilding.
+            if self.samples:
 
-            if is_complete:
-                self.report_quality(split)
-                return
+                if max_samples is not None and len(self.samples) >= max_samples:
+                    # Caller wants a capped subset and we already have enough.
+                    self.samples = self.samples[:max_samples]
+                    print(f"[CACHE TRUNCATED TO max_samples] "
+                          f"{len(self.samples)} samples")
+                    return
+
+                if is_complete and max_samples is None:
+                    self.report_quality(split)
+                    return
 
             print(
                 f"[CACHE INCOMPLETE] Resuming build from raw index "
@@ -349,6 +386,22 @@ class QAIRDataset(Dataset):
     # ========================================================
 
     def _save(self, cache_path, raw_index, complete):
+        """
+        Atomic: write to a temp file in the same directory, then rename.
+
+        The cache is autosaved every 50 samples during a build that takes
+        hours, so being interrupted mid-write is a foreseeable state, not
+        an exotic one. Writing in place meant a Ctrl-C (or a crash, or a
+        reboot) landing inside torch.save left a TRUNCATED zip archive --
+        which torch.load reports as an opaque
+        "PytorchStreamReader failed reading zip archive: failed finding
+        central directory" miniz error, destroying hours of generation
+        with no indication of what went wrong. os.replace is atomic on
+        both POSIX and Windows, so the real path only ever points at a
+        complete file.
+        """
+
+        tmp_path = cache_path + ".tmp"
 
         torch.save(
             {
@@ -359,8 +412,10 @@ class QAIRDataset(Dataset):
                 "generator": LLM_NAME,
                 "version": CACHE_VERSION,
             },
-            cache_path,
+            tmp_path,
         )
+
+        os.replace(tmp_path, cache_path)
 
     def _migrate(self, cache_path, meta):
         """
