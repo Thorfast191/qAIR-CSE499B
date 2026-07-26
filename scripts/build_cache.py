@@ -17,9 +17,13 @@ same command and it resumes where it stopped rather than restarting.
     python scripts/build_cache.py --splits train validation test
     python scripts/build_cache.py --limit 32         # quick smoke test
 
-On CPU expect roughly 10-11 s/question (~10 h for train's 3370, ~2.5 h
-for validation's 869, ~10 h for test's ~3548). A GPU is 20-30x faster --
+Measured ~5.3 s/question on 12 CPU cores (~5 h for train's 3370, ~1.3 h
+for validation's 869, ~5.2 h for test's ~3548). A GPU is 20-30x faster --
 if you have access to one, build there and copy the .pt files over.
+
+Progress goes to STDERR, because that is where tqdm writes. If you
+redirect output, watch the stderr stream -- a quiet stdout does not mean
+the build has stalled.
 """
 
 import argparse
@@ -62,9 +66,12 @@ def main():
     print(f"splits    : {', '.join(args.splits)}")
 
     if device == "cpu":
-        est = sum(SPLIT_SIZES.get(s, 0) for s in args.splits) * 10.5 / 3600
+        # 5.3 s/question measured on 12 cores. Do not use a figure taken
+        # from a short run -- model loading (~40 s) dominates the average
+        # until a few hundred samples in, which inflates it to ~10 s.
+        est = sum(SPLIT_SIZES.get(s, 0) for s in args.splits) * 5.3 / 3600
         print(
-            f"\n[CPU] Estimated ~{est:.1f} h total at ~10.5 s/question.\n"
+            f"\n[CPU] Estimated ~{est:.1f} h total at ~5.3 s/question.\n"
             f"      Safe to interrupt -- rerun this exact command to resume.\n"
             f"      A GPU is 20-30x faster if you have one available."
         )
