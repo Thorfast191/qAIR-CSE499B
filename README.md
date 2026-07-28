@@ -621,7 +621,10 @@ git clone https://github.com/Thorfast191/qAIR-CSE499B.git
 cd qAIR-CSE499B
 ```
 
-> ⚠️ This project's local `origin` points at **qAIR-CSE499A** while the README and notebooks reference **qAIR-CSE499B**. Run `git remote -v` and use whichever you actually push to — the Colab notebook clones from a `REPO_URL` variable at the top of §3 for exactly this reason.
+> ℹ️ The repo was renamed **qAIR-CSE499A → qAIR-CSE499B**. GitHub still redirects the old URL, so a stale `origin` keeps working — but the URL above is canonical. Fix a stale local checkout with:
+> ```bash
+> git remote set-url origin https://github.com/Thorfast191/qAIR-CSE499B.git
+> ```
 
 ## Install Dependencies
 

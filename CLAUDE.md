@@ -155,7 +155,7 @@ Not invoked by `main.py` or the training loop — run them from `notebooks/qAIR_
 
 ## Gotchas
 
-- The local `origin` git remote points at **qAIR-CSE499A**, while this directory, the README, and the notebooks all reference **qAIR-CSE499B**. Check `git remote -v` before assuming a clone URL in the docs matches `origin`. The v45 notebook clones from a `REPO_URL` variable at the top of its §3 for exactly this reason.
+- The repo was renamed **qAIR-CSE499A → qAIR-CSE499B**. GitHub redirects the old URL, so a checkout whose `origin` still says CSE499A pushes fine and only prints a "repository moved" notice. Canonical URL is CSE499B; fix a stale remote with `git remote set-url origin https://github.com/Thorfast191/qAIR-CSE499B.git`. The v45 notebook clones from a `REPO_URL` variable at the top of its §3.
 - `requirements.txt` deliberately does not pin `torch` — install it appropriately for the target machine's CUDA/CPU/MPS setup before installing the rest. On Colab, leave the preinstalled torch alone.
 - **Do not use `F.cross_entropy(..., label_smoothing=eps)` on `outputs["scores"]`.** Smoothing puts `eps/N` on *every* column including zero-padded ones, which sit at `-inf`, so the loss returns `inf` on any batch containing a 3-option question — and ARC-Challenge has those. `training/losses.py` applies smoothing over `O_mask` only, and `full_model` floors its final `log_softmax` at −30 for the same reason.
 - `set_seed` (`training/seed.py`) existed for the project's whole history and was **never called from any entry point**, so no run was reproducible. It is now called from `main.py`, `runner.py` and `ablations.py`; keep it that way when adding an entry point, and seed the DataLoader generator too (`seeded_generator`).
