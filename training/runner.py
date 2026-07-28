@@ -122,7 +122,7 @@ def run_training(
     persistent_steps=PERSISTENT_STEPS,
     n_qubits=N_QUBITS,
     seed=SEED,
-    name="qair_v45",
+    name="qair_v45.1",
     with_test=True,
     arc_config=ARC_CONFIG,
     phase_mode=PHASE_MODE,
@@ -133,7 +133,7 @@ def run_training(
 ):
 
     print("=" * 60)
-    print(f"qAIR-v45 TRAINING  ({arc_config})")
+    print(f"qAIR-v45.1 TRAINING  ({arc_config})")
     print("=" * 60)
 
     set_seed(seed)
