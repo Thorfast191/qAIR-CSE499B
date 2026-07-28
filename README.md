@@ -78,7 +78,7 @@ This is the part that matters. v44 reported a plausible 33.7% while three separa
 ## What v45 does *not* claim
 
 - **Not unitary evolution.** Only the hypothesis-*mixing* operator is orthogonal. The per-hypothesis refinement around it is a standard residual FFN and is not norm-preserving. The block as a whole is not unitary and is not described as such.
-- **Not quantum advantage.** `lightning.qubit` is an exact, noiseless classical statevector simulator. See the [Research Disclaimer](#️-research-disclaimer).
+- **Not quantum advantage.** Whether the simulator backing the circuit is `lightning.qubit` (CPU) or `lightning.gpu` (NVIDIA cuStateVec — see `config.QUANTUM_DEVICE`), it is exact and noiseless: no shot sampling, no physical qubits, no claimed computational advantage over the equivalent classical linear algebra. cuStateVec is a faster simulator, not a quantum computer. See the [Research Disclaimer](#️-research-disclaimer).
 - **Not a result.** As of this release the architecture is verified to *execute* and its mechanisms are verified to be *live*. Whether support/attack asymmetry actually exists in Qwen2.5-0.5B's output on ARC-Challenge, and whether the phases help, are open empirical questions that the grid in §[Ablation Framework](#-ablation-framework) is built to answer.
 
 ---
@@ -403,7 +403,9 @@ The final step is a **coherent** sum, not a weighted average: hypothesis amplitu
 
 # 🔬 How Hypotheses Become Qubits
 
-This is the part of `models/quantum_layer.py` that actually touches PennyLane. `n_qubits` defaults to 6 (down from 12 in earlier versions -- see the note below); the circuit runs on the `lightning.qubit` simulator (exact statevector, no shot noise).
+This is the part of `models/quantum_layer.py` that actually touches PennyLane. `n_qubits` defaults to 6 (down from 12 in earlier versions -- see the note below).
+
+**Which simulator runs the circuit is a device choice, not an architectural one.** `config.QUANTUM_DEVICE` (default `"auto"`) tries `lightning.gpu` — PennyLane's NVIDIA cuStateVec-backed simulator — first, and falls back to the CPU simulator `lightning.qubit` if it can't be constructed (no GPU, `pennylane-lightning[gpu]` not installed, or the plugin fails to attach). Both compute the *identical* function; the fallback is reported once per process because silently running 20-30x slower than expected is worth knowing about, not because it changes any result. `ClassicalControlLayer`'s A1c control is unaffected either way — it has no PennyLane device at all. See [Installation](#-installation) for `pip install pennylane-lightning[gpu]`.
 
 ```mermaid
 flowchart LR
@@ -412,7 +414,7 @@ flowchart LR
     C --> S["z = pi * tanh(z)<br/>squash into [-pi, pi]"]
     S --> CIRC
 
-    subgraph CIRC["PennyLane circuit — lightning.qubit, n_qubits wires"]
+    subgraph CIRC["PennyLane circuit — lightning.gpu or lightning.qubit, n_qubits wires"]
         direction TB
         HAD["Hadamard on every wire<br/>uniform superposition"] --> EMB["AngleEmbedding(z, rotation='Y')<br/>RY(z_i) on wire i<br/>⚠️ was RX — see F1"]
         EMB --> ENT["StronglyEntanglingLayers<br/>learned rotations + ring CNOTs<br/>x 3 layers"]
@@ -433,7 +435,9 @@ flowchart LR
 
 **What it is not:** this runs on a classical statevector simulator with autograd through it, so it's exact and noiseless — no sampling, no hardware, no claimed computational advantage (see [Research Disclaimer](#️-research-disclaimer)). The "quantum-ness" is in *how* the transform is structured, not in the training loop treating it specially.
 
-**Why 6 qubits, not 12:** the statevector this circuit simulates has `2^n_qubits` entries, and every gate acts on the whole vector -- cost scales roughly `O(n_qubits · 2^n_qubits)` per circuit evaluation, and this runs once per hypothesis, per sample, per batch, per epoch. At `n_qubits=12` this was the dominant per-epoch cost by a wide margin. Dropping to 6 qubits cuts the simulated state from 4096-dim to 64-dim -- a large constant-factor speedup with a much smaller circuit -- while still producing an 18-dim measurement vector, comparable to what similar hybrid quantum-classical "feature map" layers use in the literature.
+**Why 6 qubits, not 12:** the statevector this circuit simulates has `2^n_qubits` entries, and every gate acts on the whole vector -- cost scales roughly `O(n_qubits · 2^n_qubits)` per circuit evaluation, and this runs once per hypothesis, per sample, per batch, per epoch (twice as often since v45, because K = 2N). At `n_qubits=12` this was the dominant per-epoch cost by a wide margin regardless of which simulator ran it. Dropping to 6 qubits cuts the simulated state from 4096-dim to 64-dim -- a large constant-factor speedup with a much smaller circuit -- while still producing an 18-dim measurement vector, comparable to what similar hybrid quantum-classical "feature map" layers use in the literature.
+
+**GPU acceleration is a simulator swap, not an architecture change.** `notebooks/diagnose_quantum_speed.py` measures the same circuit under both `lightning.qubit` and `lightning.gpu` (`python notebooks/diagnose_quantum_speed.py lightning.qubit` vs `... lightning.gpu`) so the speedup can be quoted from this repository's own measurements rather than PennyLane's general benchmarks, which are dominated by qubit count -- at `n_qubits=6` the state is tiny (64 amplitudes) and kernel-launch overhead can eat the GPU's advantage; it is worth measuring on your own hardware rather than assumed.
 
 ---
 
@@ -503,7 +507,7 @@ flowchart LR
 
 - **`interference_ratio` is deliberately NOT a loss term.** Rewarding it would guarantee the number the quantum claim is tested by — the same mistake the old `diversity`/`spread` terms made in reverse. It is reported and left to the data.
 - **Label smoothing is applied over valid options only.** `F.cross_entropy(..., label_smoothing=ε)` spreads `ε/N` across *all* columns including zero-padded ones, and since `full_model` masks those to `-inf`, the loss returns `inf` on any batch containing a 3-option question. ARC-Challenge has those, so this is not hypothetical.
-- The quantum layer is force-run outside autocast in fp32 — PennyLane's autograd through `lightning.qubit` isn't mixed-precision safe, so only that submodule pays the fp32 cost. The Cayley solve is likewise fp32 (`torch.linalg.solve` has no half-precision kernel on several backends, and the matrices are `K×K` with `K ≤ 10`).
+- The quantum layer is force-run outside autocast in fp32 — PennyLane's autograd isn't mixed-precision safe on either `lightning.qubit` or `lightning.gpu` (cuStateVec uses fp32/fp64 statevectors, not fp16/bf16), so only that submodule pays the fp32 cost, regardless of which one is attached. The Cayley solve is likewise fp32 (`torch.linalg.solve` has no half-precision kernel on several backends, and the matrices are `K×K` with `K ≤ 10`).
 - All of this is centralized in [`config.py`](config.py) — widths, `n_qubits`, `persistent_steps`, LRs, batch size, epochs, patience, phase mode, mixing mode, and cache/checkpoint directories are defined once and imported everywhere.
 - **Current defaults (v45):** `ARC_CONFIG="ARC-Challenge"`, `MODEL_DIM=128`, `batch_size=16`, `epochs=30`, `patience=5`, `n_qubits=6`, `persistent_steps=3`, `dropout=0.15`, `weight_decay=5e-2`, `label_smoothing=0.05`, `phase_mode="learned"`, `phase_source="circuit"`, `mixing="orthogonal"`, `seed=42`, `SEEDS=(42..46)`.
 
@@ -632,6 +636,16 @@ cd qAIR-CSE499B
 pip install -r requirements.txt
 ```
 
+### Optional: GPU-accelerated quantum circuit
+
+`requirements.txt` intentionally does not include `pennylane-lightning[gpu]` — it needs an NVIDIA GPU, CUDA, and NVIDIA's cuStateVec library, none of which exist on a CPU-only machine (including this project's own local dev environment), and pinning it there would break `pip install -r requirements.txt` for everyone else. On a CUDA-capable machine:
+
+```bash
+pip install "pennylane-lightning[gpu]==0.42.0"
+```
+
+`config.QUANTUM_DEVICE = "auto"` (the default) detects it and uses it automatically; nothing else changes. Leaving it uninstalled is always safe — the circuit just runs on the CPU simulator `lightning.qubit` instead, computing the identical function, slower. See [How Hypotheses Become Qubits](#-how-hypotheses-become-qubits) for what actually differs.
+
 ---
 
 # ☁️ Google Colab Setup
@@ -758,7 +772,7 @@ Documented honestly so the architecture diagrams above aren't read as claims abo
 - **Interference is live, not demonstrated to help.** `phase_effect` and `destructive_fraction` confirm the mechanism is not inert. Whether it *improves* anything is what `A3` vs `P0` vs `P1` exists to answer, and that comparison needs the full split and multiple seeds.
 - **The frozen 384-d encoder is still the structural bottleneck.** Everything the generator knows reaches the trainable model through a 6-layer MiniLM sentence embedding. This is very likely a larger constraint on accuracy than the entire reasoning architecture. `llm_logprob` routes around it for exactly one scalar per option; fine-tuning the encoder or scoring hypotheses with the LLM directly would address it properly, and neither is implemented.
 - **Only the mixing is orthogonal.** The per-hypothesis refinement in `PersistentReasoner` is a standard residual FFN and is not norm-preserving. This block is not unitary evolution and is not claimed to be.
-- **The quantum layer is a simulator, not hardware.** `lightning.qubit` runs an exact statevector simulation with autograd through it — no shot noise, no physical qubits, no claimed quantum computational advantage.
+- **The quantum layer is a simulator, not hardware, on either backend.** Whether `lightning.qubit` (CPU) or `lightning.gpu` (NVIDIA cuStateVec) is attached, it's an exact statevector simulation with autograd through it — no shot noise, no physical qubits, no claimed quantum computational advantage. `lightning.gpu` is a faster simulator, not a step toward hardware.
 - **The circuit is a very small function class.** 6 qubits × 3 layers = **54 trainable parameters** against ~1.05M in the rest of the model. v45 gives those 54 parameters a job no classical component can do (setting the phase), but the capacity is limited by construction — which is what `A1b` vs `A1c` and `A3` vs `PS` exist to measure.
 - **`persistent_steps` has not been re-tuned since the collapse fix.** The old default of 5 was chosen when deeper meant more collapse; the current default is 3 and the right value is an open empirical question.
 - **`visualization/*.py` and `evaluation/sample_inference.py` are manual tools.** They aren't invoked by `main.py` or the training loop; run them from a notebook.
@@ -844,7 +858,7 @@ The project explores:
 - persistent hypothesis systems,
 - and energy-based reasoning architectures.
 
-This is NOT a claim of quantum computational advantage. The quantum circuit runs on a classical statevector simulator (`lightning.qubit`) with exact, noiseless expectation values -- it is a differentiable, physically-inspired feature transform, not a demonstration of any advantage physical quantum hardware would provide.
+This is NOT a claim of quantum computational advantage. The quantum circuit runs on a classical statevector simulator -- `lightning.qubit` (CPU) or, optionally, `lightning.gpu` (NVIDIA cuStateVec) -- with exact, noiseless expectation values either way. Neither is quantum hardware, and neither is faster because it is "more quantum": `lightning.gpu` is simply a GPU-accelerated implementation of the same classical linear algebra. It is a differentiable, physically-inspired feature transform, not a demonstration of any advantage physical quantum hardware would provide.
 
 ---
 

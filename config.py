@@ -116,6 +116,30 @@ MODEL_DIM = 128
 N_QUBITS = 6
 PERSISTENT_STEPS = 3
 
+# Which PennyLane device backs the quantum circuit.
+#
+#   "auto"            -- try lightning.gpu (NVIDIA cuStateVec) first, fall
+#                         back to the CPU simulator lightning.qubit if it
+#                         can't be constructed (no GPU, no cuStateVec, or
+#                         the plugin just isn't installed). Same circuit,
+#                         same function, same trained result either way --
+#                         this only changes what executes it. Default.
+#   "lightning.gpu"   -- require the GPU device; raises loudly instead of
+#                         silently training 20-30x slower on CPU. Use when
+#                         a slow run should fail fast rather than limp.
+#   "lightning.qubit" -- force the CPU simulator even when a GPU is
+#                         present, e.g. for a reproducibility check across
+#                         machines without one.
+#
+# lightning.gpu is NOT in requirements.txt: it needs an NVIDIA GPU, the
+# CUDA toolkit, and NVIDIA's cuStateVec library, none of which exist on a
+# CPU-only machine (this project's own local dev environment, notably).
+# Install it on a CUDA-capable box with:
+#     pip install pennylane-lightning[gpu]
+# (the v45 Colab notebook does this in its install cell). "auto" is what
+# makes the same code correct on both.
+QUANTUM_DEVICE = "auto"
+
 DROPOUT = 0.15
 
 # ==========================================================

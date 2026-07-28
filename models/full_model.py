@@ -11,6 +11,7 @@ from config import (
     PHASE_SOURCE,
     MIXING,
     USE_LLM_PRIOR,
+    QUANTUM_DEVICE,
 )
 
 from models.validator import HypothesisValidator
@@ -108,6 +109,7 @@ class QAIRvNext(nn.Module):
         mixing=MIXING,
         use_llm_prior=USE_LLM_PRIOR,
         use_attack=True,
+        quantum_device=QUANTUM_DEVICE,
         verbose=False,
     ):
 
@@ -145,6 +147,7 @@ class QAIRvNext(nn.Module):
         self.phase_mode = phase_mode
         self.phase_source = phase_source
         self.mixing = mixing
+        self.quantum_device = quantum_device
         self.persistent_steps = persistent_steps
 
         # The validator computes a `potential` field that was never fed
@@ -176,7 +179,10 @@ class QAIRvNext(nn.Module):
         )
 
         if backend == "quantum":
-            self.quantum = QuantumEvolutionLayer(d, n_qubits=n_qubits, verbose=verbose)
+            self.quantum = QuantumEvolutionLayer(
+                d, n_qubits=n_qubits, verbose=verbose,
+                quantum_device=quantum_device,
+            )
         elif backend == "classical_control":
             self.quantum = ClassicalControlLayer(d, n_qubits=n_qubits, verbose=verbose)
 
@@ -234,6 +240,13 @@ class QAIRvNext(nn.Module):
             # anyway (autocast is disabled either way in the training
             # loop for non-CUDA devices), and some PyTorch versions
             # validate device_type at construction even when disabled.
+            #
+            # Forcing fp32 here applies regardless of which PennyLane
+            # device is attached (see config.QUANTUM_DEVICE) -- PennyLane's
+            # autograd through lightning.qubit isn't mixed-precision safe,
+            # and lightning.gpu's cuStateVec backend is fp32/fp64
+            # statevectors, not fp16/bf16, so autocast has nothing valid to
+            # do to either one.
             from torch.amp import autocast
 
             with autocast(device_type="cuda", enabled=False):

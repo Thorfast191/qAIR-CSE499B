@@ -139,9 +139,17 @@ Load-bearing contrasts: `A3` vs `P0` (coherent vs decohered), `A3` vs `P1` (phas
 
 **Single-run ablation numbers are not interpretable here.** ARC-Challenge's 299-example validation split gives a standard error of ~2.7 points, larger than most gaps this grid produces. The suite sweeps `config.SEEDS` and reports mean ± std; `evaluation/stats.py` adds bootstrap CIs and *paired* McNemar tests (paired, because arms see identical examples in identical order).
 
-### The quantum layer is the dominant cost, and is CPU-bound regardless of GPU
+### The quantum circuit's device is a config knob, and defaults to auto-detecting a GPU
 
-`models/quantum_layer.py` runs on PennyLane's `lightning.qubit` — a CPU statevector simulator (`batch_obs=True`), not GPU-accelerated and not physical hardware (exact, noiseless expectation values, no shot sampling). Circuit cost scales roughly `O(n_qubits · 2^n_qubits)` per evaluation and runs once per hypothesis per forward call — and v45 has **twice as many hypotheses** (`K = 2N`), so this got more expensive, not less. It is forced to run in fp32 outside autocast since PennyLane's autograd through `lightning.qubit` isn't mixed-precision safe. The `autocast(device_type=...)` / `GradScaler(...)` calls are guarded to request `"cuda"` only when actually on a CUDA tensor, because some PyTorch versions validate `device_type` at construction even when disabled.
+`models/quantum_layer.py::_build_device` resolves `config.QUANTUM_DEVICE`:
+
+- `"auto"` (default) — try `lightning.gpu` (NVIDIA cuStateVec) first, fall back to the CPU simulator `lightning.qubit` if it can't be constructed (no GPU, `pennylane-lightning[gpu]` not installed, or the plugin fails to attach). Prints once per process on fallback — not once per model, which matters because an 8-arm × 5-seed ablation grid constructs 40 of these.
+- `"lightning.gpu"` — require the GPU device explicitly; raises instead of silently training 20-30x slower.
+- `"lightning.qubit"` — force CPU even with a GPU present, e.g. for a cross-machine reproducibility check.
+
+Both backends compute the **identical function** — this is a device swap, not an algorithm change, and no result depends on which one ran. `pennylane-lightning[gpu]` is not in `requirements.txt` (it needs CUDA + cuStateVec, absent on a CPU-only machine); the v45 Colab notebook installs it in its §4. `QuantumEvolutionLayer.device_name` holds whichever attached; `ClassicalControlLayer` (the A1c control) has no PennyLane device at all and is unaffected.
+
+Regardless of backend: circuit cost scales roughly `O(n_qubits · 2^n_qubits)` per evaluation and runs once per hypothesis per forward call — and v45 has **twice as many hypotheses** (`K = 2N`), so this got more expensive, not less. It is forced to run in fp32 outside autocast since PennyLane's autograd isn't mixed-precision safe on either lightning.qubit or lightning.gpu (cuStateVec statevectors are fp32/fp64, not fp16/bf16). The `autocast(device_type=...)` / `GradScaler(...)` calls in `full_model.py` are guarded to request `"cuda"` only when actually on a CUDA tensor, because some PyTorch versions validate `device_type` at construction even when disabled — this is unrelated to and doesn't change based on which PennyLane device is attached.
 
 ### Masks are threaded end-to-end — keep them that way
 
@@ -162,5 +170,6 @@ Not invoked by `main.py` or the training loop — run them from `notebooks/qAIR_
 - Each run writes `ckpt/{name}_history.pt`. It used to be one shared `ckpt/history.pt` that every ablation config overwrote in turn, so a resumed run could be handed another config's curves.
 - `PersistentReasoner.dt`, `memory_decay`, `validator_weight` and `anchor_weight` are stored as **logits** and passed through `sigmoid` at use. Writing `nn.Parameter(torch.tensor(0.10))` here means an effective value of `sigmoid(0.10) = 0.525` — the bug that accelerated the original collapse.
 - `collate_fn` reorders hypotheses when it shuffles options, and that is only correct because the cache is **mode-major** with contiguous blocks of `N`. If you change the cache layout, change that permutation with it — a silent misalignment here reproduces the exact v43 failure.
-- The validator-feedback pass runs the reasoner **and the quantum layer twice** per forward. Since the circuit is the dominant CPU cost, `validator_feedback=False` roughly halves per-epoch time while iterating.
+- The validator-feedback pass runs the reasoner **and the quantum layer twice** per forward. The circuit is the dominant cost regardless of backend, so `validator_feedback=False` roughly halves per-epoch time while iterating.
 - `interference_ratio` must **never** become a loss term. Rewarding it would guarantee the number the quantum claim is tested by — the same mistake the old `diversity`/`spread` terms made in reverse.
+- `models/quantum_layer.py::_reported` (the "print the GPU fallback message once" set) is module-level and process-global — it resets on every fresh Python process (a new notebook kernel, a new `python main.py` invocation) but stays silent across every model construction *within* one process, including inside an ablation grid. If a fallback message seems to be missing, check whether it already printed earlier in the same session rather than assuming detection silently changed.

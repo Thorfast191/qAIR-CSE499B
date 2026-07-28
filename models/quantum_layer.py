@@ -6,7 +6,101 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from config import DROPOUT
+from config import DROPOUT, QUANTUM_DEVICE
+
+DEVICE_CHOICES = ("auto", "lightning.gpu", "lightning.qubit")
+
+# Printed at most once per process, not once per model construction --
+# an 8-arm x 5-seed ablation grid builds 40 of these, and 40 identical
+# "falling back to CPU" lines would bury the one thing worth knowing.
+_reported = set()
+
+
+def _try_construct(name, n_qubits):
+
+    try:
+        # batch_obs batches the 3*n_qubits expval() observables into fewer
+        # statevector passes -- pure execution optimization, not a change
+        # to what's computed. Retry without it if this particular build
+        # doesn't expose the kwarg, rather than treating the absence of a
+        # batching optimization as a reason to fail over to a different
+        # simulator entirely.
+        return qml.device(name, wires=n_qubits, batch_obs=True)
+    except TypeError:
+        return qml.device(name, wires=n_qubits)
+
+
+def _build_device(n_qubits, preference, verbose):
+    """
+    Resolves which PennyLane device actually backs the circuit. See
+    config.QUANTUM_DEVICE for what each preference means.
+
+    A fallback here is a device SWAP, not an algorithm change -- lightning
+    .gpu and lightning.qubit compute the identical function, exactly. It is
+    reported (once) because a training run silently spending 20-30x longer
+    than expected because a GPU didn't attach is a footgun worth knowing
+    about immediately, not because the choice changes any result.
+    """
+
+    if preference not in DEVICE_CHOICES:
+        raise ValueError(
+            f"QUANTUM_DEVICE must be one of {DEVICE_CHOICES}, got "
+            f"{preference!r}"
+        )
+
+    order = ["lightning.gpu", "lightning.qubit"] if preference == "auto" else [preference]
+
+    errors = []
+
+    for name in order:
+
+        try:
+            dev = _try_construct(name, n_qubits)
+
+        except Exception as e:
+
+            errors.append(f"{name}: {type(e).__name__}: {e}")
+            continue
+
+        if name == "lightning.gpu" and "gpu_attached" not in _reported:
+            _reported.add("gpu_attached")
+            print("[QuantumEvolutionLayer] circuit running on lightning.gpu "
+                  "(NVIDIA cuStateVec)")
+
+        elif name == "lightning.qubit" and preference == "auto" and errors:
+            key = "cpu_fallback"
+            if key not in _reported:
+                _reported.add(key)
+                print(
+                    f"[QuantumEvolutionLayer] lightning.gpu unavailable "
+                    f"({errors[-1]}) -- circuit running on lightning.qubit "
+                    f"(CPU) instead. Measured 20-30x slower than the GPU "
+                    f"device (notebooks/diagnose_quantum_speed.py). If this "
+                    f"machine has an NVIDIA GPU, `pip install "
+                    f"pennylane-lightning[gpu]`; if not, this is the "
+                    f"correct fallback and nothing is wrong."
+                )
+
+        if verbose:
+            print(f"[QuantumEvolutionLayer] device: {name}")
+
+        return dev, name
+
+    if preference != "auto":
+        raise RuntimeError(
+            f"QUANTUM_DEVICE={preference!r} was requested explicitly but "
+            f"device construction failed: {errors[-1]}\n"
+            f"Install it with `pip install pennylane-lightning[gpu]` on a "
+            f"CUDA-capable machine, or set config.QUANTUM_DEVICE='auto' to "
+            f"fall back to lightning.qubit automatically instead of "
+            f"raising."
+        )
+
+    raise RuntimeError(
+        "No PennyLane device could be constructed, including the CPU "
+        "fallback lightning.qubit -- check the pennylane-lightning "
+        "install:\n" + "\n".join(errors)
+    )
 
 
 class QuantumEvolutionLayer(nn.Module):
@@ -40,9 +134,17 @@ class QuantumEvolutionLayer(nn.Module):
     sized classical bottleneck (parameter counts stay matched to the
     scalar), so `A1b_quantum_only` vs `A1c_classical_control_only` still
     isolates the circuit and nothing else.
+
+    v45 also lets `lightning.gpu` (NVIDIA cuStateVec) back this circuit
+    instead of the CPU simulator `lightning.qubit` -- see
+    `config.QUANTUM_DEVICE`. Same circuit, same trained function; only the
+    hardware executing it changes. Doubling the hypothesis count (support
+    + attack) doubled how often this runs per forward call, which is what
+    makes the GPU device worth having rather than optional polish.
     """
 
-    def __init__(self, dim, n_qubits=12, n_layers=3, verbose=False):
+    def __init__(self, dim, n_qubits=12, n_layers=3, verbose=False,
+                 quantum_device=QUANTUM_DEVICE):
 
         super().__init__()
 
@@ -54,11 +156,7 @@ class QuantumEvolutionLayer(nn.Module):
             nn.Linear(dim, n_qubits),
         )
 
-        # batch_obs=True batches the 3*n_qubits separate expval() observables
-        # this circuit returns into fewer statevector passes, instead of
-        # re-deriving the state once per observable -- pure execution
-        # optimization, no change to what's computed.
-        dev = qml.device("lightning.qubit", wires=n_qubits, batch_obs=True)
+        dev, self.device_name = _build_device(n_qubits, quantum_device, verbose)
 
         @qml.qnode(dev, interface="torch")
         def circuit(inputs, weights):
@@ -140,7 +238,7 @@ class QuantumEvolutionLayer(nn.Module):
             circuit_params = sum(p.numel() for p in self.quantum.parameters())
             print(
                 f"[QuantumEvolutionLayer] total parameters: {total_params:,} "
-                f"(circuit weights: {circuit_params:,})"
+                f"(circuit weights: {circuit_params:,}, device: {self.device_name})"
             )
 
     def forward(self, H):

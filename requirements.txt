@@ -8,6 +8,18 @@ huggingface_hub==0.33.4
 pennylane==0.42.3
 pennylane-lightning==0.42.0
 
+# Optional: GPU acceleration for the quantum circuit simulator
+# (models/quantum_layer.py). Needs an NVIDIA GPU + CUDA + cuStateVec --
+# not installed here because that would break `pip install -r
+# requirements.txt` on any CPU-only machine, including this project's own
+# local dev environment. config.QUANTUM_DEVICE="auto" (default) falls
+# back to the CPU simulator lightning.qubit automatically when this isn't
+# installed, so leaving it uninstalled is always safe, just slower.
+#
+# On a CUDA-capable machine (e.g. Colab's GPU runtime -- see
+# notebooks/qAIR_v45.ipynb §4):
+#     pip install pennylane-lightning[gpu]==0.42.0
+
 scikit-learn==1.7.0
 matplotlib==3.10.3
 seaborn==0.13.2
