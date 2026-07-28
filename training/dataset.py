@@ -10,7 +10,10 @@ from config import (
     EMBEDDING_DIM as DIM,
     EMBEDDING_MODEL,
     GEN_BATCH_SIZE,
+    GEN_MODES,
     CACHE_VERSION,
+    ARC_CONFIG,
+    cache_filename,
 )
 
 from benchmarks.arc import load_arc
@@ -23,29 +26,43 @@ class QAIRDataset(Dataset):
     """
     Cached (question, hypotheses, options) embeddings for one ARC split.
 
-    Each sample carries:
-        Q  (D,)    question embedding      -- added in cache v33
-        H  (K, D)  hypothesis embeddings
-        O  (N, D)  option embeddings
-        y  int     index of the correct option
-        is_fallback (K,) bool              -- added in cache v33
+    v45 sample schema
+    -----------------
+        Q            (D,)     question embedding
+        H            (K, D)   hypothesis embeddings, K = len(modes) * N
+        O            (N, D)   option embeddings
+        polarity     (K,)     +1 support / -1 attack
+        hyp_option   (K,)     which option each hypothesis is about
+        is_fallback  (K,) bool
+        llm_logprob  (N,)     length-normalized log P(option | question)
+                              under the generator LLM
+        y            int      index of the correct option
+        source       str      "ARC-Challenge" / "ARC-Easy"
 
-    The question embedding is the single highest-impact field here. It
-    was absent for the project's whole history even though the question
-    TEXT was already cached: measured on these exact embeddings, a plain
-    MLP scores 0.3585 from options alone and 0.4849 once the question is
-    available. Caches built before v33 are migrated in place on load --
-    that only needs the encoder, not the LLM, so it takes a minute
-    rather than hours.
+    Hypotheses are stored MODE-MAJOR -- all supports in option order,
+    then all attacks in option order. collate_fn relies on that layout
+    when it permutes options for shuffling.
+
+    Two fields are new in v45 and neither can be back-filled by
+    migration, because only the LLM can produce them: the attacking
+    hypotheses and `llm_logprob`. A v33 cache is therefore refused rather
+    than silently loaded with half the evidence channels missing.
     """
 
-    def __init__(self, split="train", max_samples=None, cache_dir="./cache"):
+    def __init__(self, split="train", max_samples=None, cache_dir="./cache",
+                 arc_config=None, modes=GEN_MODES):
 
         self.samples = []
 
+        self.arc_config = arc_config or ARC_CONFIG
+
+        self.modes = tuple(modes)
+
         os.makedirs(cache_dir, exist_ok=True)
 
-        cache_path = os.path.join(cache_dir, f"arc_{split}.pt")
+        cache_path = os.path.join(
+            cache_dir, cache_filename(split, self.arc_config)
+        )
 
         resume_raw_index = 0
 
@@ -97,24 +114,22 @@ class QAIRDataset(Dataset):
                 resume_raw_index = loaded.get("raw_index", 0)
                 version = loaded.get("version", 0)
             else:
-                # Old-format cache (plain list). We have no way of knowing
-                # whether it was finished, so treat it as complete to avoid
-                # silently re-triggering a full rebuild of a cache someone
-                # already relied on. New caches will always carry the flag.
+                # Pre-v33 flat-list format. No version, no flags, no
+                # question embedding -- nothing v45 can use.
                 self.samples = loaded
                 is_complete = True
                 resume_raw_index = 0
                 version = 0
 
-            # Refuse to silently mix embeddings built with a different
-            # encoder/dim than the one config.py currently points at. This
-            # is the exact "mat1 and mat2 shapes cannot be multiplied"
-            # failure this project already hit once (384 -> 768); without
-            # this guard, moving the dim back down (768 -> 384) would
-            # silently load the old cache and hit it again, just deeper
-            # into training instead of at dataset construction.
             if self.samples:
 
+                self._check_version(cache_path, version)
+
+                # Refuse to silently mix embeddings built with a different
+                # encoder/dim than the one config.py currently points at.
+                # This is the exact "mat1 and mat2 shapes cannot be
+                # multiplied" failure this project already hit once
+                # (384 -> 768).
                 cached_dim = self.samples[0]["H"].shape[-1]
 
                 if cached_dim != DIM:
@@ -130,9 +145,6 @@ class QAIRDataset(Dataset):
 
             print(f"[CACHE LOADED] {len(self.samples)} samples "
                   f"(complete={is_complete}, version={version})")
-
-            if self.samples and is_complete:
-                self._migrate(cache_path, loaded if isinstance(loaded, dict) else {})
 
             # Only the paths below may return early. A cache that failed to
             # load leaves samples empty, and returning here would hand the
@@ -166,7 +178,8 @@ class QAIRDataset(Dataset):
 
         else:
 
-            print(f"[CACHE MISSING] Building {split} cache from scratch...")
+            print(f"[CACHE MISSING] Building {split} cache "
+                  f"({self.arc_config}) from scratch...")
 
         # ====================================================
         # BUILD (or RESUME) CACHE
@@ -185,7 +198,7 @@ class QAIRDataset(Dataset):
 
         encoder = HypothesisEncoder()
 
-        ds = load_arc()
+        ds = load_arc(self.arc_config)
 
         if split not in ds:
 
@@ -202,7 +215,7 @@ class QAIRDataset(Dataset):
         last_raw_index = resume_raw_index
 
         # Examples that passed filtering but haven't been generated/encoded
-        # yet: (raw_idx, stem, options, y).
+        # yet: (raw_idx, stem, options, y, source).
         pending = []
 
         def flush_pending():
@@ -217,17 +230,36 @@ class QAIRDataset(Dataset):
 
             try:
                 batch_out = generator.generate_batch_with_flags(
-                    questions, options_list
+                    questions, options_list, modes=self.modes
                 )
             except Exception as e:
                 print(f"[BATCH GENERATE FAILED] {e} -- falling back per-item")
                 batch_out = [
-                    ([generator.fallback(q, o) for o in options],
-                     [True] * len(options))
+                    {
+                        "hypotheses": [
+                            generator.fallback(q, o, m)
+                            for m in self.modes for o in options
+                        ],
+                        "is_fallback": [True] * (len(self.modes) * len(options)),
+                        "polarity": [
+                            1.0 if m == "support" else -1.0
+                            for m in self.modes for _ in options
+                        ],
+                        "hyp_option": [
+                            oi for _ in self.modes for oi in range(len(options))
+                        ],
+                        "modes": [m for m in self.modes for _ in options],
+                    }
                     for q, options in zip(questions, options_list)
                 ]
 
-            all_hyp_texts = [h for hyps, _ in batch_out for h in hyps]
+            try:
+                scores_list = generator.score_options(questions, options_list)
+            except Exception as e:
+                print(f"[OPTION SCORING FAILED] {e} -- storing zeros")
+                scores_list = [[0.0] * len(o) for o in options_list]
+
+            all_hyp_texts = [h for item in batch_out for h in item["hypotheses"]]
             all_opt_texts = [o for options in options_list for o in options]
 
             H_all = encoder.encode(all_hyp_texts)
@@ -237,11 +269,11 @@ class QAIRDataset(Dataset):
             h_off = 0
             o_off = 0
 
-            for qi, ((raw_idx, stem, options, y), (hyps, flags)) in enumerate(
+            for qi, ((raw_idx, stem, options, y, source), item) in enumerate(
                 zip(pending, batch_out)
             ):
 
-                h_len = len(hyps)
+                h_len = len(item["hypotheses"])
                 o_len = len(options)
 
                 H = H_all[h_off:h_off + h_len]
@@ -256,11 +288,27 @@ class QAIRDataset(Dataset):
 
                     "options": options,
 
-                    "hypotheses": hyps,
+                    "source": source,
 
-                    "is_fallback": torch.tensor(flags, dtype=torch.bool),
+                    "hypotheses": item["hypotheses"],
 
-                    "option_index": list(range(len(options))),
+                    "modes": item["modes"],
+
+                    "is_fallback": torch.tensor(
+                        item["is_fallback"], dtype=torch.bool
+                    ),
+
+                    "polarity": torch.tensor(
+                        item["polarity"], dtype=torch.float
+                    ),
+
+                    "hyp_option": torch.tensor(
+                        item["hyp_option"], dtype=torch.long
+                    ),
+
+                    "llm_logprob": torch.tensor(
+                        scores_list[qi], dtype=torch.float
+                    ),
 
                     "Q": Q_all[qi].cpu(),
 
@@ -328,6 +376,8 @@ class QAIRDataset(Dataset):
 
                     labels = choices["label"]
 
+                source = ex.get("source", self.arc_config)
+
                 # ============================================
                 # FILTERS
                 # ============================================
@@ -353,7 +403,7 @@ class QAIRDataset(Dataset):
                 # QUEUE FOR BATCHED GENERATION + ENCODING
                 # ============================================
 
-                pending.append((raw_idx, stem, options, y))
+                pending.append((raw_idx, stem, options, y, source))
 
                 hit_chunk_size = len(pending) >= GEN_BATCH_SIZE
 
@@ -401,7 +451,46 @@ class QAIRDataset(Dataset):
         self.report_quality(split)
 
     # ========================================================
-    # SAVE / MIGRATE / REPORT
+    # VERSION GATE
+    # ========================================================
+
+    def _check_version(self, cache_path, version):
+        """
+        v45 added attacking hypotheses and cached option log-likelihoods.
+        Neither exists in a v33 cache and neither can be reconstructed
+        without re-running the LLM, so there is no migration path -- only
+        a rebuild. Failing loudly here is the whole point: a cache with
+        support-only hypotheses is precisely the configuration the audit
+        showed carries no discriminative signal (argmax diag(H.O) =
+        0.2481 against a chance of 0.2500).
+        """
+
+        needs_rebuild = (
+            version < 45
+            or not self.samples
+            or "llm_logprob" not in self.samples[0]
+            or "polarity" not in self.samples[0]
+        )
+
+        if not needs_rebuild:
+            return
+
+        raise RuntimeError(
+            f"\n{cache_path} is a version-{version} cache; v45 needs "
+            f"version {CACHE_VERSION}.\n\n"
+            f"  Missing: attacking hypotheses, per-hypothesis polarity, and "
+            f"the cached\n  per-option LLM log-likelihood. None of these can "
+            f"be migrated in -- only the\n  LLM can produce them.\n\n"
+            f"  A support-only cache is the exact configuration the v44 audit "
+            f"measured at\n  argmax diag(H.O) = 0.2481 (chance = 0.2500), i.e. "
+            f"zero discriminative\n  signal. Training on it would reproduce "
+            f"that result.\n\n"
+            f"  Delete or rename {cache_path} and rebuild:\n"
+            f"      python scripts/build_cache.py --splits train validation\n"
+        )
+
+    # ========================================================
+    # SAVE / REPORT
     # ========================================================
 
     def _save(self, cache_path, raw_index, complete):
@@ -431,6 +520,8 @@ class QAIRDataset(Dataset):
                     "complete": complete,
                     "encoder": EMBEDDING_MODEL,
                     "generator": LLM_NAME,
+                    "arc_config": self.arc_config,
+                    "modes": list(self.modes),
                     "version": CACHE_VERSION,
                 },
                 f,
@@ -529,90 +620,158 @@ class QAIRDataset(Dataset):
         except OSError:
             pass
 
-    def _migrate(self, cache_path, meta):
-        """
-        Bring a pre-v33 cache forward in place.
-
-        Only the question embedding can be recovered without the LLM, and
-        it is by far the most valuable field, so this runs automatically.
-        Hypothesis quality CANNOT be repaired by migration -- that needs
-        regeneration. report_quality() will tell you if you need it.
-        """
-
-        needs_q = "Q" not in self.samples[0]
-        needs_flags = "is_fallback" not in self.samples[0]
-
-        if not (needs_q or needs_flags):
-            return
-
-        if needs_q:
-
-            print("[CACHE MIGRATE] Adding question embeddings (encoder only, "
-                  "no LLM needed)...")
-
-            encoder = HypothesisEncoder()
-
-            texts = [s["question"] for s in self.samples]
-
-            embeddings = []
-
-            for i in tqdm(range(0, len(texts), 128), desc="Encoding questions"):
-                embeddings.append(encoder.encode(texts[i:i + 128]).cpu())
-
-            embeddings = torch.cat(embeddings)
-
-            for s, q in zip(self.samples, embeddings):
-                s["Q"] = q
-
-        if needs_flags:
-
-            # Detect the old template fallback so downstream code can mask
-            # these even on a legacy cache.
-            import re
-
-            pattern = re.compile(r"correctly explains the .* in the question\.$")
-
-            for s in self.samples:
-                s["is_fallback"] = torch.tensor(
-                    [bool(pattern.search(h.strip())) for h in s["hypotheses"]],
-                    dtype=torch.bool,
-                )
-
-        self._save(cache_path, meta.get("raw_index", 0), complete=True)
-
-        print(f"[CACHE MIGRATED] {cache_path} -> version {CACHE_VERSION}")
+    # ========================================================
+    # QUALITY REPORT -- the gate v44 did not have
+    # ========================================================
 
     def report_quality(self, split):
         """
-        Print the hypothesis-quality numbers that the audit had to
-        reverse-engineer from the cache by hand. If the fallback rate is
-        high, the hypotheses carry little signal and no amount of
-        architecture will help -- regenerate instead.
+        v44 reported one number here: the template-fallback rate. It was
+        0% on the final cache, and the cache was still useless, because
+        a fluent hypothesis that justifies every option is uninformative
+        in exactly the same way a template is -- it just doesn't look it.
+
+        So this now measures DISCRIMINATIVE SIGNAL directly. Every line
+        below is a zero-shot accuracy that needs no training, printed
+        against chance:
+
+          support agreement    argmax_n  cos(H_sup_n, O_n)
+          attack agreement     argmin_n  cos(H_att_n, O_n)
+          support - attack     argmax_n  [cos(H_sup_n,O_n) - cos(H_att_n,O_n)]
+          LLM log-likelihood   argmax_n  llm_logprob_n
+
+        If none of these beats chance, the cache carries no usable
+        evidence and no architecture trained on it can do better than
+        option priors. Rebuild with a different prompt; do not tune the
+        model. That is the mistake this project spent a year making.
         """
 
-        if not self.samples or "is_fallback" not in self.samples[0]:
+        if not self.samples:
             return
+
+        n_total = len(self.samples)
+
+        header = f"[CACHE QUALITY {split} / {self.arc_config}]"
+
+        # ---------------- fallbacks ----------------
 
         flags = torch.cat([s["is_fallback"] for s in self.samples])
 
-        total = flags.numel()
         n_fb = int(flags.sum())
+        total_h = flags.numel()
 
-        per_sample = torch.tensor(
-            [int(s["is_fallback"].all()) for s in self.samples]
-        )
+        fully = sum(int(bool(s["is_fallback"].all())) for s in self.samples)
 
         print(
-            f"[CACHE QUALITY {split}] fallback hypotheses "
-            f"{n_fb}/{total} = {100 * n_fb / max(total, 1):.1f}%   "
-            f"fully-fallback samples {int(per_sample.sum())}/{len(self.samples)}"
+            f"{header} {n_total} samples   fallback hypotheses "
+            f"{n_fb}/{total_h} = {100 * n_fb / max(total_h, 1):.1f}%   "
+            f"fully-fallback samples {fully}/{n_total}"
         )
 
-        if n_fb / max(total, 1) > 0.10:
+        if n_fb / max(total_h, 1) > 0.10:
             print(
-                "[CACHE QUALITY WARNING] >10% of hypotheses are fallbacks. "
-                "These carry no information about which option is correct. "
-                "Delete this cache and rebuild with the current generator."
+                "  [WARNING] >10% fallbacks. These carry no information about "
+                "which option is correct."
+            )
+
+        # ---------------- signal ----------------
+
+        rows = [
+            s for s in self.samples
+            if "polarity" in s and s["H"].shape[0] == 2 * s["O"].shape[0]
+        ]
+
+        if not rows:
+            print("  [WARNING] no support/attack pairs found -- cannot measure "
+                  "discriminative signal.")
+            return
+
+        sup_hits, att_hits, margin_hits, llm_hits = 0, 0, 0, 0
+
+        h_cos_sup, h_cos_att, o_cos, sup_att_cos = [], [], [], []
+
+        chance = 0.0
+
+        for s in rows:
+
+            O = torch.nn.functional.normalize(s["O"].float(), dim=-1)
+            H = torch.nn.functional.normalize(s["H"].float(), dim=-1)
+
+            n = O.shape[0]
+
+            chance += 1.0 / n
+
+            sup, att = H[:n], H[n:2 * n]
+
+            d_sup = (sup * O).sum(-1)
+            d_att = (att * O).sum(-1)
+
+            sup_hits += int(d_sup.argmax().item() == s["y"])
+            att_hits += int(d_att.argmin().item() == s["y"])
+            margin_hits += int((d_sup - d_att).argmax().item() == s["y"])
+
+            lp = s.get("llm_logprob")
+            if lp is not None and lp.numel() == n:
+                llm_hits += int(lp.argmax().item() == s["y"])
+
+            h_cos_sup.append(_offdiag_mean(sup @ sup.T))
+            h_cos_att.append(_offdiag_mean(att @ att.T))
+            o_cos.append(_offdiag_mean(O @ O.T))
+            sup_att_cos.append((sup * att).sum(-1).mean().item())
+
+        m = len(rows)
+        chance /= m
+
+        def line(label, hits):
+            acc = hits / m
+            verdict = "  <-- at chance" if abs(acc - chance) < 0.02 else ""
+            print(f"    {label:<26s} {acc:.4f}{verdict}")
+            return acc
+
+        print(f"  zero-shot signal (chance = {chance:.4f}, n = {m}):")
+
+        acc_sup = line("support agreement", sup_hits)
+        acc_att = line("attack disagreement", att_hits)
+        acc_margin = line("support - attack margin", margin_hits)
+        acc_llm = line("LLM option likelihood", llm_hits)
+
+        print(
+            f"  diversity: cos(H_sup) {sum(h_cos_sup)/m:.4f}   "
+            f"cos(H_att) {sum(h_cos_att)/m:.4f}   "
+            f"cos(O) {sum(o_cos)/m:.4f}   "
+            f"cos(sup_n, att_n) {sum(sup_att_cos)/m:.4f}"
+        )
+
+        best_h = max(acc_sup, acc_att, acc_margin)
+
+        if best_h < chance + 0.02:
+            print(
+                "\n  [SIGNAL WARNING] No hypothesis-derived statistic beats "
+                "chance by 2 points.\n"
+                "  The generated evidence is symmetric: it justifies (or "
+                "objects to) every\n  option equally well, so it carries no "
+                "information about which is correct.\n"
+                "  This is a GENERATION problem, not an architecture problem. "
+                "Change the\n  prompts in models/generator.py and rebuild -- "
+                "tuning the model cannot\n  recover a signal that was never "
+                "generated.\n"
+            )
+
+        # 0.05 margin, not 0: on near-orthogonal embeddings both means sit
+        # within noise of zero and a bare > comparison fires at random.
+        if sum(h_cos_sup) / m > sum(o_cos) / m + 0.05:
+            print(
+                "  [DIVERSITY WARNING] supporting hypotheses are LESS diverse "
+                "than the options\n  they were generated from -- generation is "
+                "reducing discriminative spread."
+            )
+
+        if acc_llm > best_h + 0.05:
+            print(
+                f"  [NOTE] the raw LLM likelihood ({acc_llm:.4f}) beats every "
+                f"hypothesis-derived\n  statistic ({best_h:.4f}). Any accuracy "
+                f"gain the trained model shows must be\n  checked against the "
+                f"no-LLM-prior ablation before it is attributed to reasoning."
             )
 
     def __len__(self):
@@ -624,18 +783,41 @@ class QAIRDataset(Dataset):
         return self.samples[idx]
 
 
+def _offdiag_mean(S):
+    """Mean of the off-diagonal entries of a square similarity matrix."""
+
+    k = S.shape[0]
+
+    if k < 2:
+        return 0.0
+
+    return ((S.sum() - S.diagonal().sum()) / (k * (k - 1))).item()
+
+
 def collate_fn(batch, shuffle_options=True):
     """
-    shuffle_options: randomly permutes each sample's option (and matching
-    hypothesis) order so the model can't learn positional shortcuts from
-    the small dataset. Pass shuffle_options=False for validation/eval so
-    metrics are stable and reproducible.
+    shuffle_options: randomly permutes each sample's option order (and
+    the matching hypotheses) so the model can't learn positional
+    shortcuts from a small dataset. Pass shuffle_options=False for
+    validation/eval so metrics are stable and reproducible.
 
     Ragged option/hypothesis counts (ARC has a handful of 3- and
-    5-option questions) are zero-padded, and the masks below say which
-    entries are real. Those masks used to be computed here and then
-    never passed to the model, so a zero-padded option participated in
-    every reduction and could be returned as the prediction.
+    5-option questions) are zero-padded, and the masks say which entries
+    are real. Those masks used to be computed here and then never passed
+    to the model, so a zero-padded option participated in every reduction
+    and could be returned as the prediction. Any new module that reduces
+    over the K or N axis must accept and honor them.
+
+    v45 emits three more tensors:
+
+        polarity  (B, K)     +1 support / -1 attack
+        align     (B, K, N)  1 where hypothesis k is ABOUT option n
+        llm_lp    (B, N)     cached per-option LLM log-likelihood
+
+    `align` is what lets the selector treat "the attack on option 2" as
+    evidence about option 2 specifically. Without it the support/attack
+    distinction is just a sign bit floating free of the option it refers
+    to.
     """
 
     max_h = max(x["H"].shape[0] for x in batch)
@@ -644,13 +826,9 @@ def collate_fn(batch, shuffle_options=True):
 
     dim = batch[0]["H"].shape[-1]
 
-    Hs = []
-    Os = []
-    Qs = []
-    ys = []
-    H_masks = []
-    O_masks = []
-    fallbacks = []
+    Hs, Os, Qs, ys = [], [], [], []
+    H_masks, O_masks, fallbacks = [], [], []
+    polarities, aligns, llm_lps = [], [], []
 
     for sample in batch:
 
@@ -658,21 +836,41 @@ def collate_fn(batch, shuffle_options=True):
         O = sample["O"]
         y = sample["y"]
 
-        fb = sample.get(
-            "is_fallback", torch.zeros(H.shape[0], dtype=torch.bool)
-        )
+        n = O.shape[0]
+        k = H.shape[0]
+
+        fb = sample.get("is_fallback", torch.zeros(k, dtype=torch.bool))
+
+        pol = sample.get("polarity", torch.ones(k))
+
+        hyp_opt = sample.get(
+            "hyp_option", torch.arange(k) % max(n, 1)
+        ).clone()
+
+        llm_lp = sample.get("llm_logprob", torch.zeros(n)).float()
 
         if shuffle_options:
-
-            n = O.shape[0]
 
             perm = torch.randperm(n)
 
             O = O[perm]
+            llm_lp = llm_lp[perm]
 
-            if H.shape[0] == n:
-                H = H[perm]
-                fb = fb[perm]
+            # Mode-major layout: reorder each contiguous block of n
+            # hypotheses by the SAME permutation, so block b row i still
+            # refers to option i afterwards. Anything that isn't a clean
+            # multiple of n (a legacy or hand-built sample) is left
+            # alone rather than silently misaligned.
+            if k % n == 0:
+
+                idx = torch.cat([
+                    perm + block * n for block in range(k // n)
+                ])
+
+                H = H[idx]
+                fb = fb[idx]
+                pol = pol[idx]
+                hyp_opt = torch.arange(n).repeat(k // n)
 
             y = int((perm == y).nonzero(as_tuple=True)[0].item())
 
@@ -680,7 +878,6 @@ def collate_fn(batch, shuffle_options=True):
         o_len = O.shape[0]
 
         H_mask = torch.zeros(max_h, dtype=torch.bool)
-
         O_mask = torch.zeros(max_o, dtype=torch.bool)
 
         H_mask[:h_len] = True
@@ -689,17 +886,21 @@ def collate_fn(batch, shuffle_options=True):
         fb_pad = torch.zeros(max_h, dtype=torch.bool)
         fb_pad[:h_len] = fb
 
-        if H.shape[0] < max_h:
+        pol_pad = torch.zeros(max_h)
+        pol_pad[:h_len] = pol
 
-            pad = H.new_zeros(max_h - h_len, dim)
+        align = torch.zeros(max_h, max_o)
+        valid = hyp_opt[:h_len].clamp(min=0, max=o_len - 1)
+        align[torch.arange(h_len), valid] = 1.0
 
-            H = torch.cat([H, pad], dim=0)
+        lp_pad = torch.zeros(max_o)
+        lp_pad[:o_len] = llm_lp
 
-        if O.shape[0] < max_o:
+        if h_len < max_h:
+            H = torch.cat([H, H.new_zeros(max_h - h_len, dim)], dim=0)
 
-            pad = O.new_zeros(max_o - o_len, dim)
-
-            O = torch.cat([O, pad], dim=0)
+        if o_len < max_o:
+            O = torch.cat([O, O.new_zeros(max_o - o_len, dim)], dim=0)
 
         Hs.append(H)
         Os.append(O)
@@ -709,6 +910,9 @@ def collate_fn(batch, shuffle_options=True):
         H_masks.append(H_mask)
         O_masks.append(O_mask)
         fallbacks.append(fb_pad)
+        polarities.append(pol_pad)
+        aligns.append(align)
+        llm_lps.append(lp_pad)
 
     return {
         "H": torch.stack(Hs),
@@ -717,5 +921,8 @@ def collate_fn(batch, shuffle_options=True):
         "H_mask": torch.stack(H_masks),
         "O_mask": torch.stack(O_masks),
         "is_fallback": torch.stack(fallbacks),
+        "polarity": torch.stack(polarities),
+        "align": torch.stack(aligns),
+        "llm_logprob": torch.stack(llm_lps),
         "y": torch.tensor(ys, dtype=torch.long),
     }

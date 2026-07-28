@@ -7,7 +7,7 @@ from torch.amp import autocast, GradScaler
 from config import BASE_LR, NEW_LR, WEIGHT_DECAY
 
 from training.losses import compute_loss
-from training.evaluate import evaluate
+from training.evaluate import evaluate, batch_to_model
 
 
 class Trainer:
@@ -136,6 +136,10 @@ class Trainer:
             "collapse_peak": [],
             "pairwise_cos": [],
             "h_cos": [],
+            "interference_ratio": [],
+            "phase_effect": [],
+            "destructive_fraction": [],
+            "ece": [],
         }
 
         epochs_no_improve = 0
@@ -153,12 +157,9 @@ class Trainer:
 
             for batch in pbar:
 
-                H = batch["H"].to(self.device)
-                O = batch["O"].to(self.device)
-                Q = batch["Q"].to(self.device)
+                inputs = batch_to_model(batch, self.device)
+
                 y = batch["y"].to(self.device)
-                H_mask = batch["H_mask"].to(self.device)
-                O_mask = batch["O_mask"].to(self.device)
 
                 self.optim.zero_grad(set_to_none=True)
 
@@ -172,9 +173,7 @@ class Trainer:
                     device_type=autocast_device_type,
                     enabled=(self.device == "cuda"),
                 ):
-                    outputs = self.model(
-                        H, O, Q=Q, y=y, H_mask=H_mask, O_mask=O_mask
-                    )
+                    outputs = self.model(**inputs, y=y)
                     loss = compute_loss(outputs, y)
 
                 self.scaler.scale(loss).backward()
@@ -194,7 +193,9 @@ class Trainer:
 
             history["loss"].append(avg_loss)
             for k in ("acc", "entropy", "diversity", "spread",
-                      "collapse_peak", "pairwise_cos", "h_cos"):
+                      "collapse_peak", "pairwise_cos", "h_cos",
+                      "interference_ratio", "phase_effect",
+                      "destructive_fraction", "ece"):
                 history[k].append(metrics[k])
 
             self.save_history(history)
@@ -204,18 +205,44 @@ class Trainer:
                   f"LR {self.scheduler.get_last_lr()[0]:.6f}")
             print(f"Train Loss    : {avg_loss:.4f}")
             print(f"Val Acc       : {metrics['acc']:.4f}")
+            print(f"ECE           : {metrics['ece']:.4f}")
             print(f"Entropy       : {metrics['entropy']:.4f}")
             print(f"Diversity     : {metrics['diversity']:.6f}")
             print(f"Collapse Peak : {metrics['collapse_peak']:.4f}")
             print(f"Pairwise Cos  : {metrics['pairwise_cos']:.4f} (energy rows)")
             print(f"H Cos         : {metrics['h_cos']:.4f} (hypothesis vectors)")
+            print(f"Interference  : {metrics['interference_ratio']:.4f} "
+                  f"(|coherent - classical| / classical)")
+            print(f"Phase effect  : {metrics['phase_effect']:.4f}   "
+                  f"destructive {metrics['destructive_fraction']:.4f}")
 
             if self.verbose and hasattr(self.model, "fusion"):
                 print(
                     f"energy_alpha={torch.sigmoid(self.model.fusion.energy_alpha).item():.4f} "
                     f"validator_alpha={torch.sigmoid(self.model.fusion.validator_alpha).item():.4f} "
                     f"dt={torch.sigmoid(self.model.reasoner.dt).item():.4f} "
-                    f"anchor={torch.sigmoid(self.model.reasoner.anchor_weight).item():.4f}"
+                    f"anchor={torch.sigmoid(self.model.reasoner.anchor_weight).item():.4f} "
+                    f"llm_prior={torch.nn.functional.softplus(self.model.llm_prior_weight).item():.4f}"
+                )
+
+            # The complex-amplitude machinery is the v45 claim, so it gets
+            # the same treatment every other claim in this repo now gets:
+            # a number, checked automatically, that says when it is inert.
+            if getattr(self.model, "phase_mode", "classical") == "learned" and (
+                metrics["phase_effect"] < 0.01
+                or metrics["destructive_fraction"] < 0.01
+            ):
+                print(
+                    f"[{self.name}][INTERFERENCE WARNING] "
+                    f"phase_effect={metrics['phase_effect']:.5f}  "
+                    f"destructive_fraction="
+                    f"{metrics['destructive_fraction']:.5f}.\n"
+                    f"  The phases are inert: the coherent sum is "
+                    f"indistinguishable from the in-phase\n  one, and nothing "
+                    f"is cancelling. Everything here is reproducible by a "
+                    f"classical\n  mixture, so do not report a quantum result "
+                    f"from this run -- the same failure the\n  v44 audit found, "
+                    f"one level up."
                 )
 
             # The check that would have caught the original failure.

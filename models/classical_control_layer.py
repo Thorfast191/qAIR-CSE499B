@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from config import DROPOUT
+
 
 class ClassicalControlLayer(nn.Module):
     """
@@ -31,6 +33,8 @@ class ClassicalControlLayer(nn.Module):
 
         super().__init__()
 
+        self.n_qubits = n_qubits
+
         self.compress = nn.Sequential(
             nn.Linear(dim, dim),
             nn.GELU(),
@@ -56,7 +60,7 @@ class ClassicalControlLayer(nn.Module):
             nn.Linear(bottleneck_dim, dim),
             nn.GELU(),
             nn.LayerNorm(dim),
-            nn.Dropout(0.10),
+            nn.Dropout(DROPOUT),
         )
 
         self.fusion_gate = nn.Sequential(
@@ -69,9 +73,16 @@ class ClassicalControlLayer(nn.Module):
         self.correction = nn.Sequential(
             nn.Linear(dim, dim),
             nn.GELU(),
-            nn.Dropout(0.10),
+            nn.Dropout(DROPOUT),
             nn.Linear(dim, dim),
         )
+
+        # Matches QuantumEvolutionLayer.phase_gain exactly. The phase
+        # itself is read off the classical bottleneck the same way the
+        # circuit's is read off its measurements (atan2 of two thirds of
+        # the vector), so the two arms differ only in what produced the
+        # numbers -- which is the entire point of this control.
+        self.phase_gain = nn.Parameter(torch.tensor(1.0))
 
         self.energy_head = nn.Sequential(
             nn.Linear(dim, dim),
@@ -108,9 +119,16 @@ class ClassicalControlLayer(nn.Module):
         # distribution into the part that actually differs.
         z = math.pi * torch.tanh(z)
 
-        q = self.classical_transform(z)
+        measurements = self.classical_transform(z)
 
-        q = self.expand(q)
+        n = self.n_qubits
+
+        x_mean = measurements[:, :n].mean(dim=-1)
+        y_mean = measurements[:, n:2 * n].mean(dim=-1)
+
+        phase = self.phase_gain * torch.atan2(y_mean, x_mean)
+
+        q = self.expand(measurements)
 
         H_flat = H.reshape(B * K, D)
 
@@ -128,4 +146,6 @@ class ClassicalControlLayer(nn.Module):
 
         energy = energy.reshape(B, K)
 
-        return q, energy
+        phase = phase.reshape(B, K)
+
+        return q, energy, phase

@@ -2,24 +2,41 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from config import DROPOUT
+
 
 class HypothesisValidator(nn.Module):
     """
     Scores hypothesis-vs-option compatibility and emits a guidance
     potential for the reasoner.
 
-    Fixed in the audit
-    ------------------
+    On the "Born rule" here
+    -----------------------
+    The distribution computed below weights the guidance potential. With
+    real, non-negative amplitudes it is a temperature-scaled softmax and
+    nothing more -- that is stated rather than dressed up. The place
+    where amplitudes are genuinely complex, and where the Born rule
+    therefore does real work, is models/interference.py; this module
+    feeds it (through `validator_energy`) but does not itself perform a
+    measurement.
+
+    Fixed in the v44 audit, kept
+    ----------------------------
     * Question conditioning. The question embedding was never computed
-      anywhere in the pipeline, so the validator had to judge options
-      using only hypotheses -- a third of which were template fallbacks.
-      Measured on cached ARC embeddings with a plain MLP: options only
-      0.3585, +question 0.4849. `use_question` adds Q*O and Q-O terms.
-    * Born rule normalization. This module L1-normalized the amplitude
-      before squaring, which is not the Born rule (that needs L2) and
-      gave it an effective temperature of T/2 versus collapse.py's T for
-      the same nominal T. Both now use the L2 convention.
-    * Padded options are excluded from the means over N.
+      anywhere in the pipeline, so the validator judged options using
+      hypotheses alone -- a third of which were template fallbacks.
+      Measured with a plain MLP on cached ARC embeddings: options only
+      0.3585, +question 0.4849.
+    * L2 (not L1) normalization of the amplitude. L1 is not the Born
+      convention and gave this module half the collapse controller's
+      effective temperature at the same nominal T.
+    * Padded options are excluded from every mean over N.
+
+    New in v45
+    ----------
+    * `align` / `polarity` features, so the validator can distinguish
+      "the support for option n" from "the objection to option n"
+      instead of averaging them together.
     """
 
     def __init__(self, dim, use_question=True):
@@ -29,14 +46,16 @@ class HypothesisValidator(nn.Module):
         self.use_question = use_question
 
         # [H, O, H-O, H*O] plus, when the question is available,
-        # [Q*O, Q-O].
-        n_feat = 6 if use_question else 4
+        # [Q*O, Q-O]; then three scalars: align, polarity, align*polarity.
+        n_vec = 6 if use_question else 4
+
+        n_feat = dim * n_vec + 3
 
         self.encoder = nn.Sequential(
-            nn.Linear(dim * n_feat, dim * 2),
+            nn.Linear(n_feat, dim * 2),
             nn.GELU(),
             nn.LayerNorm(dim * 2),
-            nn.Dropout(0.10),
+            nn.Dropout(DROPOUT),
             nn.Linear(dim * 2, dim),
             nn.GELU(),
         )
@@ -62,13 +81,14 @@ class HypothesisValidator(nn.Module):
         self.potential = nn.Sequential(
             nn.Linear(dim + 1, dim),
             nn.GELU(),
-            nn.Dropout(0.10),
+            nn.Dropout(DROPOUT),
             nn.Linear(dim, dim),
         )
 
         self.temperature = nn.Parameter(torch.tensor(1.0))
 
-    def forward(self, H, O, Q=None, y=None, H_mask=None, O_mask=None):
+    def forward(self, H, O, Q=None, y=None, H_mask=None, O_mask=None,
+                align=None, polarity=None):
 
         B, K, D = H.shape
         _, N, _ = O.shape
@@ -79,10 +99,7 @@ class HypothesisValidator(nn.Module):
         H_exp = H.unsqueeze(2).expand(B, K, N, D)
         O_exp = O.unsqueeze(1).expand(B, K, N, D)
 
-        diff = H_exp - O_exp
-        prod = H_exp * O_exp
-
-        parts = [H_exp, O_exp, diff, prod]
+        parts = [H_exp, O_exp, H_exp - O_exp, H_exp * O_exp]
 
         if self.use_question:
 
@@ -90,14 +107,24 @@ class HypothesisValidator(nn.Module):
                 raise ValueError(
                     "HypothesisValidator was built with use_question=True "
                     "but forward() got Q=None. Rebuild the cache so it "
-                    "carries question embeddings (training/dataset.py "
-                    "migrates existing caches automatically), or construct "
-                    "the model with use_question=False."
+                    "carries question embeddings, or construct the model "
+                    "with use_question=False."
                 )
 
             Q_exp = F.normalize(Q, dim=-1).view(B, 1, 1, D).expand(B, K, N, D)
 
             parts += [Q_exp * O_exp, Q_exp - O_exp]
+
+        if align is None:
+            align = torch.zeros(B, K, N, device=H.device, dtype=H.dtype)
+
+        if polarity is None:
+            polarity = torch.zeros(B, K, device=H.device, dtype=H.dtype)
+
+        a = align.unsqueeze(-1)
+        p = polarity.view(B, K, 1, 1).expand(B, K, N, 1)
+
+        parts += [a, p, a * p]
 
         features = torch.cat(parts, dim=-1)
 
@@ -143,7 +170,8 @@ class HypothesisValidator(nn.Module):
         energy = -energy
 
         # ------------------------------------------------------------
-        # Born rule -- same L2 convention as collapse.py
+        # Weighting distribution over hypotheses (see class docstring:
+        # this is a softmax, and is not claimed to be more)
         # ------------------------------------------------------------
 
         temperature = 0.5 + F.softplus(self.temperature)

@@ -6,15 +6,47 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from config import DROPOUT
+
 
 class QuantumEvolutionLayer(nn.Module):
     """
-    Quantum Hamiltonian Evolution Layer
+    Quantum evolution layer: compress -> circuit -> expand, gated back
+    into the hypothesis stream.
+
+    v45: the circuit drives a phase
+    -------------------------------
+    The v44 audit's blunt finding was that this layer was decoration --
+    54 circuit parameters out of 10.58M (0.0005%), wrapped in a classical
+    MLP that did all the work, and bit-exactly a constant function until
+    the AngleEmbedding rotation was fixed. Removing it changed nothing
+    measurable, which is not a good place for the component a project is
+    named after.
+
+    v45 gives it something only a quantum circuit naturally produces: a
+    PHASE. The circuit already measures <X>, <Y> and <Z> per wire, and
+
+        phi = atan2(mean <Y>, mean <X>)
+
+    is the azimuthal angle of the measured Bloch vector -- the physically
+    meaningful phase of the state the circuit prepared. That angle is fed
+    to models/interference.py as the hypothesis phase, where it decides
+    whether two hypotheses reinforce or cancel each other's support for
+    an option. The circuit therefore participates in an operation with no
+    classical equivalent, rather than contributing a 54-parameter
+    perturbation to a residual stream.
+
+    ClassicalControlLayer computes its phase the same way from an equally
+    sized classical bottleneck (parameter counts stay matched to the
+    scalar), so `A1b_quantum_only` vs `A1c_classical_control_only` still
+    isolates the circuit and nothing else.
     """
 
     def __init__(self, dim, n_qubits=12, n_layers=3, verbose=False):
 
         super().__init__()
+
+        self.n_qubits = n_qubits
 
         self.compress = nn.Sequential(
             nn.Linear(dim, dim),
@@ -66,7 +98,7 @@ class QuantumEvolutionLayer(nn.Module):
             nn.Linear(n_qubits * 3, dim),
             nn.GELU(),
             nn.LayerNorm(dim),
-            nn.Dropout(0.10),
+            nn.Dropout(DROPOUT),
         )
 
         self.fusion_gate = nn.Sequential(
@@ -79,9 +111,14 @@ class QuantumEvolutionLayer(nn.Module):
         self.correction = nn.Sequential(
             nn.Linear(dim, dim),
             nn.GELU(),
-            nn.Dropout(0.10),
+            nn.Dropout(DROPOUT),
             nn.Linear(dim, dim),
         )
+
+        # Single scalar, matched by ClassicalControlLayer, so the phase
+        # channel cannot explain a quantum-vs-classical gap through
+        # parameter count.
+        self.phase_gain = nn.Parameter(torch.tensor(1.0))
 
         self.energy_head = nn.Sequential(
             nn.Linear(dim, dim),
@@ -116,9 +153,19 @@ class QuantumEvolutionLayer(nn.Module):
 
         z = math.pi * torch.tanh(z)
 
-        q = self.quantum(z)
+        measurements = self.quantum(z)
 
-        q = self.expand(q)
+        # measurements is [<X_0..X_{n-1}>, <Y_0..Y_{n-1}>, <Z_0..Z_{n-1}>].
+        # The azimuthal angle of the mean Bloch vector is the phase the
+        # circuit actually prepared -- see the class docstring.
+        n = self.n_qubits
+
+        x_mean = measurements[:, :n].mean(dim=-1)
+        y_mean = measurements[:, n:2 * n].mean(dim=-1)
+
+        phase = self.phase_gain * torch.atan2(y_mean, x_mean)
+
+        q = self.expand(measurements)
 
         H_flat = H.reshape(B * K, D)
 
@@ -136,4 +183,6 @@ class QuantumEvolutionLayer(nn.Module):
 
         energy = energy.reshape(B, K)
 
-        return q, energy
+        phase = phase.reshape(B, K)
+
+        return q, energy, phase

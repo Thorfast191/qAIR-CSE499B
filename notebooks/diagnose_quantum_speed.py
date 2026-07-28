@@ -17,10 +17,13 @@ import time
 
 import torch
 
-from config import N_QUBITS
+from config import N_QUBITS, MODEL_DIM, EMBEDDING_DIM
 from models.quantum_layer import QuantumEvolutionLayer
 
-DIM = 384
+# v45 runs the model at config.MODEL_DIM, not the raw embedding width --
+# the layer is built at whatever width it is given, so time it at the
+# width it will actually see.
+DIM = MODEL_DIM or EMBEDDING_DIM
 
 
 def time_forward_backward(layer, batch_rows, iters=5):
@@ -28,8 +31,10 @@ def time_forward_backward(layer, batch_rows, iters=5):
     H = torch.randn(batch_rows, 1, DIM, requires_grad=False)
 
     # warm-up (first call pays circuit compilation/tracing cost -- exclude it)
-    q, e = layer(H)
-    (q.sum() + e.sum()).backward()
+    # v45: the layer returns (state, energy, phase) -- the phase is the
+    # circuit's atan2(<Y>, <X>), which feeds models/interference.py.
+    q, e, p = layer(H)
+    (q.sum() + e.sum() + p.sum()).backward()
 
     torch.cuda.synchronize() if torch.cuda.is_available() else None
 
@@ -37,8 +42,8 @@ def time_forward_backward(layer, batch_rows, iters=5):
 
     for _ in range(iters):
         layer.zero_grad(set_to_none=True)
-        q, e = layer(H)
-        (q.sum() + e.sum()).backward()
+        q, e, p = layer(H)
+        (q.sum() + e.sum() + p.sum()).backward()
 
     torch.cuda.synchronize() if torch.cuda.is_available() else None
 

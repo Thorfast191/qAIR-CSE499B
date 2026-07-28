@@ -4,121 +4,163 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-qAIR-vNext: a research prototype that replaces single-path LLM reasoning with persistent, multi-hypothesis, quantum-circuit-inspired reasoning, evaluated on ARC science QA. This is an active research codebase, not production software — no test suite, no linter/build config exist in this repo (nothing to invent here). See `README.md` for the full architecture writeup with diagrams; this file covers what a future agent needs to know before editing code.
+qAIR-vNext: a research prototype that replaces single-path LLM reasoning with persistent, multi-hypothesis, quantum-circuit-inspired reasoning, evaluated on **ARC-Challenge**. This is an active research codebase, not production software — there is no test suite and no linter/build config, and none should be invented here without being asked. `README.md` has the full architecture writeup with diagrams; this file covers what a future agent needs to know before editing code.
+
+**Current version: v45.** Training happens on **Colab, not locally** — `notebooks/qAIR_v45.ipynb` mounts Drive, clones this repo from GitHub, installs, builds the cache into Drive, and trains there. The local checkout is for editing code.
 
 ## Commands
 
 ```bash
 pip install -r requirements.txt
 
-# ONE-TIME, slow (~10 h train / ~2.5 h validation on CPU, 20-30x faster on GPU).
-# Resumable: autosaves every 50 samples, saves are atomic, rerun to resume.
+# ONE-TIME. v45 generates TWO hypotheses per option (support + attack) plus
+# an option-scoring pass, so budget ~2x v44. Resumable: autosaves every 50
+# samples, saves are atomic, rerun the same command to resume.
 python scripts/build_cache.py --splits train validation
 
-python main.py --mode train      # single training run (training/runner.py)
-python main.py --mode ablation   # deconfounded grid x config.SEEDS (training/ablations.py)
+#   >>> READ THE [CACHE QUALITY] BLOCK IT PRINTS. <<<
+#   If no hypothesis-derived statistic beats chance, stop and change the
+#   prompts in models/generator.py. Nothing downstream can recover a signal
+#   that was never generated. This is the mistake the project spent a year
+#   making.
+
+python main.py --mode train                    # single run (training/runner.py)
+python main.py --mode ablation                 # full grid x config.SEEDS
+python main.py --mode ablation --configs A3_persistent P0_classical_collapse
 
 # THE regression test -- exits non-zero if the model ignores its hypotheses.
-# Run after every training run; see "The failure this repo is built around".
-python -m evaluation.input_ablation --ckpt ckpt/qair_v44_best.pt
+# Run after every training run. Reports PER CHANNEL.
+python -m evaluation.input_ablation --ckpt ckpt/qair_v45_best.pt
 
-python -m evaluation.baselines --mode all          # data ceiling + direct-LLM baseline
+python -m evaluation.baselines --mode all      # cached direct-LLM + data ceiling
 python -m evaluation.stats --results ckpt/ablation_results.pt   # CIs + McNemar
 
-# Isolated timing check for the quantum layer only -- no dataset/LLM/cache needed
+# Isolated timing check for the quantum layer only -- no dataset/LLM/cache
 python notebooks/diagnose_quantum_speed.py
 ```
 
-## The failure this repo is built around
+All modules import with absolute paths from the repo root (`from models.generator import ...`, `from config import ...`) — run scripts from the repo root, not from inside a subpackage.
 
-A v44 audit found that the three mechanisms constituting the research
-contribution -- the quantum circuit, multi-hypothesis superposition, and
-Born-rule collapse -- were all **provably inert**, while the model
-reported a plausible 33.7%. Four independent bugs:
+## The two failures this repo is built around
 
-1. **The circuit ignored its input.** `Hadamard` prepares |+>, the +1
-   eigenstate of Pauli-X; `AngleEmbedding` defaults to `rotation="X"`;
-   RX on an X-eigenstate is a global phase. Output std across distinct
-   inputs was **0.000e+00**. Fixed with `rotation="Y"`.
-2. **The reasoner collapsed to a constant fixed point** (pairwise
-   cos -> 1.000000, input-independent). Unnormalized `tanh` aggregation
-   plus a `dt` that was 0.525 rather than the intended 0.10 because it
-   was stored post-sigmoid. Fixed with softmax rows, an H0 anchor, and
-   logit-space parameters.
-3. **The prediction was bit-identical under every corruption of H** --
-   zeros, noise, shuffled, another question's hypotheses. Only `O`
-   mattered. Now guarded by `evaluation/input_ablation.py`.
-4. **33% of cached hypotheses were template fallbacks**, and line-based
-   parsing misaligned hypotheses to options. Fixed by generating one
-   hypothesis per (question, option) pair in its own completion.
+Read this before trusting any number, including one you produce yourself.
 
-Plus: **the question was never encoded** (+12.6 points once it was), and
-`collapse_loss` *rewarded* hypothesis collapse by adding `diversity` and
-`spread` with positive coefficients.
+### v44: three mechanisms were provably inert
 
-**Two rules that follow from this:**
+A full audit found the quantum circuit, multi-hypothesis superposition, and Born-rule collapse were **all provably inert** while the model reported a plausible-looking 33.7%. Four independent causes: the circuit ignored its input entirely (`AngleEmbedding` defaults to `rotation="X"`, and RX on the Hadamard's X-eigenstate is a global phase — output std across distinct inputs was `0.000e+00`, i.e. a learned constant); the reasoner contracted to a constant fixed point (pairwise cos → `1.000000`); the prediction was **bit-identical** under every corruption of `H`; and 33% of cached hypotheses were template fallbacks with broken option alignment. Separately, the question was never encoded (+12.6 points once it was), and `collapse_loss` actively *rewarded* hypothesis collapse. All fixed; all fixes still in the code.
 
-- **Never trust accuracy alone here.** Accuracy could not have revealed
-  any of the above. Check `pairwise_cos` in the training log (the trainer
-  prints `[COLLAPSE WARNING]` above 0.99) and run `input_ablation.py`.
-- **Every pre-v44 quantum/ablation number is void.** Do not compare new
-  results against old ones or against numbers in old notebooks.
+### v45: the generation protocol destroyed the signal by construction
 
-The current cell-by-cell workflow lives in `notebooks/qAIR_v44.ipynb` (local). `qAIR_v43.ipynb` and the `qair_v4[02]_colab.ipynb` notebooks are **pre-audit and will not run against the current API** — kept as history only.
+Fixing those four bugs did not make the system work, and a second audit found why. v44 asked the LLM, per option, to "state the reasoning that would make this proposed answer correct". A competent model obliges — for **all four options**. Measured on the clean v44 cache (0% fallbacks, alignment guaranteed by construction, question encoded):
 
-All modules import with absolute paths from the repo root (`from models.generator import ...`, `from training.dataset import ...`, `from config import ...`) — run scripts from the repo root, not from inside a subpackage.
+```
+argmax diag(H . O)            0.2481     chance = 0.2500
+mean pairwise cos(H_k, H_j)   0.6466     vs cos(O_k, O_j) = 0.4773
+train loss -54% while val acc declined, epochs 1 -> 6
+```
+
+Zero discriminative signal, and hypotheses *less* diverse than the options they were generated from. That single fact explains every downstream observation without needing any of the four v44 bugs: the selector ignored `H` because `H` was uninformative, the collapse was uniform because there was nothing to discriminate, and accuracy tracked option priors because that was the only signal present.
+
+**Three rules follow, and they are the most important content in this file:**
+
+1. **Never trust accuracy alone here.** Accuracy could not have revealed any of the above. Check the cache-quality gate at build time, then `pairwise_cos` / `h_cos` / `phase_effect` / `destructive_fraction` in the training log, then `evaluation/input_ablation.py`.
+2. **If the signal gate reports chance, fix `models/generator.py`, not the model.** No architecture recovers information that was never generated. Tuning in response to a dead cache is the specific failure mode this project is a case study in.
+3. **Every pre-v45 number is void.** Do not compare new results against old ones or against numbers printed in old notebooks. The cache format is incompatible and is *refused* rather than migrated.
+
+`notebooks/qAIR_v45.ipynb` is the current workflow. `qAIR_v44.ipynb` and earlier **will not run against the v45 API** — the model takes `polarity`/`align`/`llm_logprob`, the quantum layer returns three values, and the cache is rejected. They are kept as history only.
 
 ## Architecture
 
-### Two-stage pipeline: offline data prep vs. online trainable model
+### Two stages: offline data prep vs. online trainable model
 
-1. **Offline, cached to disk, runs once per split** (`training/dataset.py`, `models/generator.py`, `models/encoder.py`): for each ARC question, `HypothesisGenerator` (Qwen2.5-0.5B-Instruct) generates one hypothesis per answer option — **each in its own completion**, so hypothesis↔option alignment is positional and cannot drift — then `HypothesisEncoder` (`all-MiniLM-L6-v2`, 384-dim) embeds the question (`Q`), hypotheses (`H`) and options (`O`). Result is cached to `cache/arc_{split}.pt` with a per-hypothesis `is_fallback` flag. `QAIRvNext` never sees raw text — only `Q`/`H`/`O` embedding tensors. Pre-v33 caches are auto-migrated on load to add `Q` (encoder only, no LLM); migration **cannot** repair hypothesis quality, so `report_quality()` warns if the fallback rate exceeds 10%.
-2. **Online, trainable, every forward call** (`models/full_model.py: QAIRvNext.forward(H, O, Q, y, H_mask, O_mask)`):
-   `H` → `PersistentReasoner` (`persistent_steps` iterations of a Hamiltonian-style field: metric projection, interaction matrix, interference, memory decay, gated evolution) → `QuantumEvolutionLayer` (compress to `n_qubits` rotation angles → PennyLane circuit → expand back, gated-fused into `H`, emits `quantum_energy`) → `HypothesisValidator` (pairwise `H`×`O` features → causal/diversity/specificity/relevance heads → Born-rule probability distribution → `validator_energy`, `potential`) → `EnergyAnswerSelector` (pairwise `H`×`O` energy, three fused methods) → `EnergyFusion` (`models/energy_fusion.py`: learned sigmoid blend of selector/quantum/validator energy into per-hypothesis `collapse_energy`) → `CollapseController` (`models/collapse.py`: second Born-rule application, adaptive per-sample temperature, produces `collapse_probs`) → final answer is a **probability-weighted marginalization** of `answer_energy` over hypotheses (soft, not a hard argmax over hypotheses — superposition survives to the final score).
+**1. Offline, cached to disk, once per split** (`training/dataset.py`, `models/generator.py`, `models/encoder.py`). For each ARC question, `HypothesisGenerator` (Qwen2.5-0.5B-Instruct) generates **two hypotheses per answer option** — a `support` and an `attack` — **each in its own completion**, so hypothesis↔option alignment is positional and cannot drift. It also records the LLM's own length-normalized per-option log-likelihood (`score_options`). `HypothesisEncoder` (`all-MiniLM-L6-v2`, 384-dim) embeds question, hypotheses and options. Everything lands in `cache/arc_challenge_{split}.pt` — **the benchmark name is part of the filename**, so a Challenge cache and a merged cache can never be confused.
 
-**Closed in v44:** `HypothesisValidator`'s `potential` used to be computed and never fed back. `QAIRvNext.forward` now runs a second reasoner pass guided by it (`validator_feedback=True` by default).
+Cache schema: `K = 2N` hypotheses stored **mode-major** (all supports in option order, then all attacks), plus `polarity` (+1 support / −1 attack), `hyp_option`, `is_fallback`, `llm_logprob`, `Q`, `H`, `O`, `y`, `source`. `QAIRvNext` never sees raw text.
 
-### `config.py` is the single source of truth for hyperparameters and device
+**2. Online, trainable, every forward call** (`models/full_model.py`):
 
-`EMBEDDING_DIM`/`EMBEDDING_MODEL`, `N_QUBITS`, `PERSISTENT_STEPS`, LRs, `BATCH_SIZE`, `EPOCHS`, `PATIENCE`, `GEN_BATCH_SIZE`, `CACHE_DIR`/`CKPT_DIR` all live here and are imported everywhere (`training/runner.py`, `training/ablations.py`, `models/encoder.py`, `evaluation/sample_inference.py`) rather than hardcoded per entry point. This exists because those values used to drift between files independently (e.g. `sample_inference.py` once hardcoded `dim=384` after the encoder had already moved to 768-dim, causing a `mat1 and mat2 shapes cannot be multiplied` crash at inference time) — **when changing any of these, change `config.py` only.**
+```
+in_proj (384 -> MODEL_DIM)
+  -> PersistentReasoner      (orthogonal Cayley mixing)
+  -> QuantumEvolutionLayer   (returns state, energy, PHASE)
+  -> HypothesisValidator     (-> potential, fed back into the reasoner)
+  -> EnergyAnswerSelector    (-> E_kn and a compatibility phase theta_kn)
+  -> EnergyFusion            (-> E_k)
+  -> CollapseController      (adaptive per-sample temperature)
+  -> CoherentCollapse        (P(n) proportional to |sum_k c_k v_kn|^2)
+  -> + LLM log-prior (optional, ablatable)
+  -> log_softmax
+```
 
-`config.py` also has `resolve_device()` (`cuda` > `mps` > `cpu`), used everywhere instead of hardcoding `"cuda"` — `HypothesisGenerator`/`HypothesisEncoder` previously defaulted to `device="cuda"` unconditionally and would crash outright on a CPU-only or Apple Silicon machine.
+### `config.py` is the single source of truth
 
-### Cache correctness guard
+`ARC_CONFIG`, `EMBEDDING_DIM`/`EMBEDDING_MODEL`, `MODEL_DIM`, `N_QUBITS`, `PERSISTENT_STEPS`, `DROPOUT`, `GEN_MODES`, `PHASE_MODE`, `PHASE_SOURCE`, `MIXING`, `USE_LLM_PRIOR`, LRs, `BATCH_SIZE`, `EPOCHS`, `PATIENCE`, `LABEL_SMOOTHING`, `CACHE_VERSION`, `CACHE_DIR`/`CKPT_DIR`. This file exists because those values used to drift between modules independently — `sample_inference.py` once hardcoded `dim=384` after the encoder had moved to 768-dim, crashing at inference. **When changing any of these, change `config.py` only.**
 
-`QAIRDataset.__init__` (`training/dataset.py`) checks a loaded cache's embedding dim against `config.EMBEDDING_DIM` before using it and **raises** rather than silently mixing embeddings built with a different encoder/dim. Cache building also batches hypothesis generation + encoding in chunks of `GEN_BATCH_SIZE` (`HypothesisGenerator.generate_batch`) instead of one ARC question at a time — this speeds up the one-time cache build only, not per-epoch training (the quantum layer, not data loading, dominates per-epoch cost — see below).
+`resolve_device()` (`cuda` > `mps` > `cpu`) is used everywhere instead of hardcoding `"cuda"`. `cache_filename(split, arc_config)` is the only place cache paths are constructed.
 
-### Ablation grid is deconfounded by design, and now multi-seed
+### The v45 mechanisms, and the metric that falsifies each
 
-`training/ablations.py::ABLATIONS` — each config changes exactly one variable relative to its nearest neighbor so effects can be isolated rather than tangled together. Every config trains from a fresh random init — warm-starting from a "parent" config's converged weights was tried and reverted (it saturated `EnergyAnswerSelector`'s energy clamp and killed gradient flow through the newly-added component).
+Everything below is a claim with a number attached. If you change one of these modules, keep its metric working — that pairing *is* the design.
 
-**Single-run ablation numbers are not interpretable here.** ARC's 869-example validation split gives a standard error of ~1.6 points, larger than most gaps this grid produces. The suite sweeps `config.SEEDS` and reports mean ± std; `evaluation/stats.py` adds bootstrap CIs and *paired* McNemar tests (paired, because arms see identical examples — far more powerful than comparing independent proportions).
+- **`models/interference.py`** — complex amplitudes. `c_k = r_k·e^{iφ_k}`, `v_kn = t_kn·e^{iθ_kn}`, `P(n) ∝ |Σ_k c_k v_kn|²`. Cross-terms can be negative, so hypotheses cancel. `P_n = |v_n⟩⟨v_n|` is Hermitian and positive semi-definite, so `⟨ψ|P_n|ψ⟩` is a legitimate measurement rather than a metaphor.
+  - `phase_effect` → 0 ⇒ the phases are inert (coherent sum equals the in-phase sum) and the Born rule is a softmax again.
+  - `destructive_fraction` → 0 ⇒ nothing is cancelling. **This is the strict one**: it is identically 0 for any real non-negative amplitude scheme, so a non-zero value is the one measurement here that a classical mixture cannot reproduce.
+  - `interference_ratio` is large *even with zero phases* — it only says amplitudes are summed before squaring. Never quote it alone as evidence of anything quantum.
+  - `phase_mode ∈ {"learned", "zero", "classical"}` are parameter-matched controls; `"classical"` is exactly v44's mixture.
 
-`A1b_quantum_only` vs `A1c_classical_control_only` is the load-bearing comparison: `ClassicalControlLayer` matches `QuantumEvolutionLayer`'s entire surrounding architecture and total parameter count (the circuit is 54 of ~1.12M), so a gap cannot be attributed to capacity.
+- **`models/persistent_reasoner.py`** — orthogonal mixing via the Cayley transform of an antisymmetric coupling: `U = (I − X)⁻¹(I + X)`, `X = dt·A/2`, `A = (S − Sᵀ)/2`. Norm-preserving and invertible, so distinct hypotheses provably stay distinct; **signed**, so cancellation is possible (v44's row-softmax was a convex combination and could not cancel). `(I − X)` is always invertible — a real antisymmetric matrix has purely imaginary eigenvalues, so `1 − iλ ≠ 0` — no numerical guard needed. Computed in fp32 (`torch.linalg.solve` has no half-precision kernel on several backends; the matrices are `K×K`, `K ≤ 10`). `mixing="softmax"` restores v44 as an ablation arm.
+  - **Only the mixing is orthogonal.** The residual FFN around it is not norm-preserving. Do not describe this block as unitary evolution.
 
-### Quantum layer is the dominant cost, and is CPU-bound regardless of GPU
+- **`models/quantum_layer.py`** — returns `(state, energy, phase)` where `phase = phase_gain · atan2(mean⟨Y⟩, mean⟨X⟩)`, the azimuthal angle of the measured Bloch vector. This is what gives the 54 circuit parameters a job no classical component can do. `ClassicalControlLayer` reads a phase identically from an equally sized classical bottleneck, so parameter counts stay matched — measured 1,056,382 (quantum) vs 1,057,138 (classical), +0.07%.
 
-`models/quantum_layer.py` runs on PennyLane's `lightning.qubit` — a CPU statevector simulator (`batch_obs=True`), not GPU-accelerated and not physical hardware (exact, noiseless expectation values, no shot sampling — see the Research Disclaimer in `README.md`). Circuit cost scales roughly `O(n_qubits · 2^n_qubits)` per evaluation and runs once per hypothesis per forward call — this is the dominant per-epoch cost in the model at typical qubit counts, and a discrete/cloud GPU does not meaningfully accelerate it at small qubit counts (6-12). It's forced to run in fp32 outside autocast (`models/full_model.py`) since PennyLane's autograd through `lightning.qubit` isn't mixed-precision safe; the `autocast(device_type=...)`/`GradScaler(...)` calls in `full_model.py`/`training/train.py` are guarded to only ever request `"cuda"` when actually on a CUDA tensor/device, since some PyTorch versions validate `device_type` at construction even when disabled.
+- **`models/full_model.py::polarity_phase`** — support and attack start π out of phase, because an objection to option *n* is the negation of the support for option *n*. It is **learnable** (→ 0 recovers in-phase behaviour). Without it the phase channel starts uniform and `destructive_fraction` is exactly 0 at initialization, i.e. the mechanism the v45 claim rests on would begin dead.
 
-### The Born rule is applied twice, for different things — and is currently just softmax
+- **The LLM log-prior** (`use_llm_prior`) adds the cached per-option log-likelihood to the final score. Legitimate — it is the only channel by which the LLM's judgement bypasses the frozen 384-d encoder — but it can carry the accuracy on its own. **Always** read `input_ablation` alongside accuracy, and report `A3` (prior off) as the reasoning result and `F0` (prior on) as the system's accuracy. Conflating them is how a thin wrapper around an LLM gets published as a reasoning advance.
 
-Both `models/validator.py` and `models/collapse.py` implement the same pattern (`amplitude = exp(-E/2T)`, L2-normalize, `probability = amplitude²`, numerically stabilized by subtracting the max log-amplitude before exponentiating) but over different axes: the validator applies it over hypothesis-vs-option compatibility; the collapse controller applies it over the *fused* per-hypothesis energy.
+### Cache guards
 
-**With real, non-negative amplitudes this is algebraically identical to `softmax(-E/T)`** — verified numerically to fp32 epsilon (5.96e-08). It adds no expressive content over a temperature-scaled softmax. Keep the amplitude form (it is the hook for the complex-amplitude extension, where interference cross-terms would make it genuinely non-classical), but **do not describe it as quantum** in any write-up until that lands. Before v44 the validator L1-normalized instead of L2, which is not the Born rule and silently gave it half the collapse controller's effective temperature.
+`QAIRDataset.__init__` enforces three things and **raises** rather than proceeding:
+
+1. **Dim guard** — cached embedding dim must match `config.EMBEDDING_DIM`.
+2. **Version gate** — cache version must be ≥ 45. A v33 cache has no attacking hypotheses and no `llm_logprob`, and neither can be migrated in; only the LLM can produce them.
+3. **Build lock** — heartbeat-based, so two concurrent builds can't clobber each other's `raw_index`. Liveness is tracked by timestamp, *not* by `os.kill(pid, 0)`: on Windows that call terminates the process it is asking about.
+
+`report_quality()` is the gate v44 lacked. It prints zero-shot accuracies (support agreement, attack disagreement, support−attack margin, LLM likelihood) against chance, plus hypothesis/option diversity. **A high fallback rate was never the real problem — symmetric evidence was, and it looks fine on every metric v44 had.**
+
+### The ablation grid is deconfounded by design, and multi-seed
+
+`training/ablations.py::ABLATIONS`, three groups, with `DEFAULTS` merged into every arm via `resolve_config`.
+
+- **Group 1 (`A*`)** isolates the reasoning stack with `use_llm_prior=False` throughout — with the prior on, the grid mostly measures how well each arm learns to lean on it.
+- **Group 2 (`P0`, `P1`, `PS`, `M0`, `E0`)** each change exactly one v45 mechanism relative to `A3_persistent`.
+- **Group 3 (`F0`)** is the deployed system.
+
+Load-bearing contrasts: `A3` vs `P0` (coherent vs decohered), `A3` vs `P1` (phases vs mere coherent summation), `A1b` vs `A1c` (circuit vs parameter-matched MLP), `A3` vs `E0` (does the attack channel earn its keep), `F0` vs `A3` (how much is just the generator).
+
+**Single-run ablation numbers are not interpretable here.** ARC-Challenge's 299-example validation split gives a standard error of ~2.7 points, larger than most gaps this grid produces. The suite sweeps `config.SEEDS` and reports mean ± std; `evaluation/stats.py` adds bootstrap CIs and *paired* McNemar tests (paired, because arms see identical examples in identical order).
+
+### The quantum layer is the dominant cost, and is CPU-bound regardless of GPU
+
+`models/quantum_layer.py` runs on PennyLane's `lightning.qubit` — a CPU statevector simulator (`batch_obs=True`), not GPU-accelerated and not physical hardware (exact, noiseless expectation values, no shot sampling). Circuit cost scales roughly `O(n_qubits · 2^n_qubits)` per evaluation and runs once per hypothesis per forward call — and v45 has **twice as many hypotheses** (`K = 2N`), so this got more expensive, not less. It is forced to run in fp32 outside autocast since PennyLane's autograd through `lightning.qubit` isn't mixed-precision safe. The `autocast(device_type=...)` / `GradScaler(...)` calls are guarded to request `"cuda"` only when actually on a CUDA tensor, because some PyTorch versions validate `device_type` at construction even when disabled.
 
 ### Masks are threaded end-to-end — keep them that way
 
-`collate_fn` zero-pads ragged option/hypothesis counts (ARC has some 3- and 5-option questions) and emits `H_mask`/`O_mask`. These were computed and then **never passed to the model**, so padded options participated in every reduction and could be returned as the argmax. Any new module that reduces over the K or N axis must accept and honor the mask.
+`collate_fn` zero-pads ragged option/hypothesis counts (ARC has 3- and 5-option questions) and emits `H_mask`/`O_mask`. These were once computed and then **never passed to the model**, so padded options participated in every reduction and could be returned as the argmax. Any new module that reduces over the K or N axis must accept and honor the mask.
+
+v45 adds `polarity` (B,K), `align` (B,K,N) and `llm_logprob` (B,N) to the batch. `training/evaluate.py::batch_to_model` is the single place that knows the model's input signature — use it rather than unpacking batches by hand, so `evaluate`, `input_ablation` and the notebooks cannot drift.
 
 ### `visualization/*.py` and `evaluation/sample_inference.py` are manual tools
 
-Not invoked by `main.py` or the training loop — run them from `notebooks/qAIR_v44.ipynb` or standalone.
+Not invoked by `main.py` or the training loop — run them from `notebooks/qAIR_v45.ipynb` or standalone.
 
 ## Gotchas
 
-- The local `origin` git remote points at `qAIR-CSE499A`, while this directory, the README, and the notebooks all reference `qAIR-CSE499B` — check `git remote -v` before assuming the clone URL in docs matches `origin`.
-- `requirements.txt` does not pin an exact `torch` version — install it appropriately for the target machine's CUDA/CPU/MPS setup before installing the rest.
+- The local `origin` git remote points at **qAIR-CSE499A**, while this directory, the README, and the notebooks all reference **qAIR-CSE499B**. Check `git remote -v` before assuming a clone URL in the docs matches `origin`. The v45 notebook clones from a `REPO_URL` variable at the top of its §3 for exactly this reason.
+- `requirements.txt` deliberately does not pin `torch` — install it appropriately for the target machine's CUDA/CPU/MPS setup before installing the rest. On Colab, leave the preinstalled torch alone.
+- **Do not use `F.cross_entropy(..., label_smoothing=eps)` on `outputs["scores"]`.** Smoothing puts `eps/N` on *every* column including zero-padded ones, which sit at `-inf`, so the loss returns `inf` on any batch containing a 3-option question — and ARC-Challenge has those. `training/losses.py` applies smoothing over `O_mask` only, and `full_model` floors its final `log_softmax` at −30 for the same reason.
 - `set_seed` (`training/seed.py`) existed for the project's whole history and was **never called from any entry point**, so no run was reproducible. It is now called from `main.py`, `runner.py` and `ablations.py`; keep it that way when adding an entry point, and seed the DataLoader generator too (`seeded_generator`).
-- Each run writes `ckpt/{name}_history.pt`. It used to be a single shared `ckpt/history.pt` that all seven ablation configs overwrote in turn.
-- `PersistentReasoner.dt`, `memory_decay`, `validator_weight` and `anchor_weight` are stored as **logits** and passed through `sigmoid` at use. Writing `nn.Parameter(torch.tensor(0.10))` here means an effective value of 0.525, which is the bug that accelerated the original collapse.
-- The validator-feedback pass runs the reasoner **and the quantum layer twice** per forward. Since the circuit is the dominant CPU cost, `validator_feedback=False` roughly halves per-epoch time when iterating quickly.
+- Each run writes `ckpt/{name}_history.pt`. It used to be one shared `ckpt/history.pt` that every ablation config overwrote in turn, so a resumed run could be handed another config's curves.
+- `PersistentReasoner.dt`, `memory_decay`, `validator_weight` and `anchor_weight` are stored as **logits** and passed through `sigmoid` at use. Writing `nn.Parameter(torch.tensor(0.10))` here means an effective value of `sigmoid(0.10) = 0.525` — the bug that accelerated the original collapse.
+- `collate_fn` reorders hypotheses when it shuffles options, and that is only correct because the cache is **mode-major** with contiguous blocks of `N`. If you change the cache layout, change that permutation with it — a silent misalignment here reproduces the exact v43 failure.
+- The validator-feedback pass runs the reasoner **and the quantum layer twice** per forward. Since the circuit is the dominant CPU cost, `validator_feedback=False` roughly halves per-epoch time while iterating.
+- `interference_ratio` must **never** become a loss term. Rewarding it would guarantee the number the quantum claim is tested by — the same mistake the old `diversity`/`spread` terms made in reverse.

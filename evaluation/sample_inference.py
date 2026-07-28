@@ -1,7 +1,7 @@
 import os
 import torch
 
-from config import EMBEDDING_DIM, N_QUBITS
+from config import EMBEDDING_DIM, MODEL_DIM, N_QUBITS, GEN_MODES
 from models.generator import HypothesisGenerator
 from models.encoder import HypothesisEncoder
 from models.full_model import QAIRvNext
@@ -106,19 +106,29 @@ TEST_SAMPLES = [
 
 def load_ablation_model(ckpt_dir, name, cfg, device, n_qubits=N_QUBITS):
     """
-    Loads a specific named ablation checkpoint (e.g. "A4_full_hybrid")
+    Loads a specific named ablation checkpoint (e.g. "A3_persistent")
     with the EXACT config it was trained with, so persistent_steps /
-    use_quantum / use_validator can never silently mismatch.
+    backend / phase_mode can never silently mismatch.
     """
+
+    from training.ablations import resolve_config
+
+    cfg = resolve_config(cfg)
 
     model = QAIRvNext(
         dim=EMBEDDING_DIM,
-        use_quantum=cfg.get("use_quantum", False),
+        model_dim=cfg.get("model_dim", MODEL_DIM),
+        use_quantum=cfg["use_quantum"],
         use_validator=cfg["use_validator"],
         persistent_steps=cfg["persistent_steps"],
         n_qubits=n_qubits,
         backend=cfg.get("backend"),
-        use_question=cfg.get("use_question", True),
+        use_question=cfg["use_question"],
+        phase_mode=cfg["phase_mode"],
+        phase_source=cfg["phase_source"],
+        mixing=cfg["mixing"],
+        use_llm_prior=cfg["use_llm_prior"],
+        use_attack=cfg["use_attack"],
     )
 
     ckpt_path = os.path.join(ckpt_dir, f"{name}_best.pt")
@@ -135,12 +145,24 @@ def load_ablation_model(ckpt_dir, name, cfg, device, n_qubits=N_QUBITS):
     return model
 
 
-def run_sample_evaluation(model, device):
+def run_sample_evaluation(model, device, generator=None, encoder=None,
+                          modes=GEN_MODES):
+    """
+    Runs the live pipeline end to end on hand-written questions: generate
+    support + attack per option, encode, and push everything the trained
+    model expects (polarity, alignment, cached-equivalent LLM
+    log-likelihood) through a single forward pass.
+
+    n=10, so this is a smoke test of the live path, not a metric. Its
+    value is qualitative: the printed support/attack pairs show whether
+    the generator is producing evidence or just fluent text, which no
+    aggregate accuracy will tell you.
+    """
 
     model.eval()
 
-    generator = HypothesisGenerator(device=device)
-    encoder = HypothesisEncoder(device=device)
+    generator = generator or HypothesisGenerator(device=device)
+    encoder = encoder or HypothesisEncoder(device=device)
 
     correct = 0
 
@@ -154,14 +176,36 @@ def run_sample_evaluation(model, device):
         options = sample["options"]
         answer = sample["answer"]
 
-        hypotheses = generator.generate(question, options)
+        item = generator.generate_batch_with_flags(
+            [question], [options], modes=modes
+        )[0]
 
-        H = encoder.encode(hypotheses).unsqueeze(0)
-        O = encoder.encode(options).unsqueeze(0)
-        Q = encoder.encode([question])
+        hypotheses = item["hypotheses"]
+
+        llm_scores = generator.score_options([question], [options])[0]
+
+        H = encoder.encode(hypotheses).unsqueeze(0).to(device)
+        O = encoder.encode(options).unsqueeze(0).to(device)
+        Q = encoder.encode([question]).to(device)
+
+        K, N = H.shape[1], O.shape[1]
+
+        polarity = torch.tensor(
+            item["polarity"], dtype=H.dtype, device=device
+        ).unsqueeze(0)
+
+        align = torch.zeros(1, K, N, dtype=H.dtype, device=device)
+        align[0, torch.arange(K), torch.tensor(item["hyp_option"])] = 1.0
+
+        llm_logprob = torch.tensor(
+            llm_scores, dtype=H.dtype, device=device
+        ).unsqueeze(0)
 
         with torch.no_grad():
-            outputs = model(H.to(device), O.to(device), Q=Q.to(device))
+            outputs = model(
+                H, O, Q=Q,
+                polarity=polarity, align=align, llm_logprob=llm_logprob,
+            )
 
         pred = outputs["scores"].argmax(dim=-1).item()
 
@@ -176,24 +220,21 @@ def run_sample_evaluation(model, device):
         print(f"Sample {idx+1}")
         print("-" * 70)
         print(f"Question:\n{question}\n")
-        print("Options:")
+
         for i, op in enumerate(options):
-            print(f"{i}. {op}")
-        print("\nHypotheses:")
-        for i, h in enumerate(hypotheses):
-            print(f"{i+1}. {h}")
+            mark = "*" if i == answer else " "
+            print(f" {mark}[{i}] {op}   (llm logp {llm_scores[i]:+.3f})")
+            for m_i, mode in enumerate(modes):
+                print(f"       {mode:<8s}: {hypotheses[m_i * len(options) + i]}")
+
         print()
-        print("Collapse Probabilities:")
+        print("Collapse probabilities (per hypothesis):")
         print(collapse)
+        print(f"Interference ratio: {float(outputs['interference_ratio']):.4f}")
         print()
-        print("Prediction:")
-        print(options[pred])
-        print()
-        print("Ground Truth:")
-        print(options[answer])
-        print()
-        print("Correct:")
-        print("YES" if is_correct else "NO")
+        print(f"Prediction   : {options[pred]}")
+        print(f"Ground truth : {options[answer]}")
+        print("Correct      :", "YES" if is_correct else "NO")
 
     acc = correct / len(TEST_SAMPLES)
 
