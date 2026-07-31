@@ -52,6 +52,23 @@ an accuracy that looks plausible. The ablation grid contains
 parameter-matched `phase_mode="zero"` and `phase_mode="classical"` arms
 so the effect can be attributed rather than assumed.
 
+v46 adds the comparison those diagnostics cannot make. `interference_ratio`,
+`phase_effect` and `destructive_fraction` all say the mechanism is LIVE;
+none of them says it helps. `destructive_fraction` is the clearest case: with
+K = 2N matched support/attack pairs and near-equal amplitudes it is a step
+function of the single relative phase between the two channels
+(models/full_model.py::polarity_phase). Sweeping that scalar through this
+module with everything else held fixed gives 0.000 from 0 to 1.6 rad, 0.494
+at 2.4, 0.994 at 2.8, and 1.000 at 3.0 and above -- and it is initialized at
+pi, past the step, so it reads 1.0 for an untrained model.
+
+The number that decides the claim is therefore `coherent_acc` vs
+`classical_acc` in training/evaluate.py: the accuracy of ranking options by
+`coherent` against ranking them by `classical`, the decohered limit of the
+SAME amplitudes over the SAME energies in the same forward pass. If the
+coherent sum does not rank options better than the mixture it replaced, the
+complex amplitudes are not earning their place however live they measure.
+
 Modes
 -----
     "learned"   full complex amplitudes; phases supplied by the caller
@@ -269,6 +286,35 @@ class CoherentCollapse(nn.Module):
 
         destructive_fraction = masked_mean((interference < 0).to(classical.dtype))
 
+        # Relative spread of the option weights, (max - min) / mean, for
+        # the coherent sum and for the decohered mixture it replaced.
+        #
+        # Read the obvious way round this is actively misleading, so state
+        # it explicitly: contrast RISES under cancellation. When the
+        # coherent sum nearly cancels, what survives is a small residual,
+        # and the relative spread of a small residual is amplified. A high
+        # `coherent_contrast` therefore says the phases pulled the option
+        # weights apart -- NOT that they pulled the correct option away
+        # from the rest. Separating those two takes `ece` and the
+        # coherent_acc vs classical_acc comparison in evaluate.py.
+        valid_opt = om > 0
+
+        n_opt = om.sum(dim=1).clamp(min=1.0)
+
+        def option_contrast(x):
+
+            x_mean = (x * om).sum(dim=1) / n_opt
+
+            x_max = x.masked_fill(~valid_opt, float("-inf")).max(dim=1).values
+
+            x_min = x.masked_fill(~valid_opt, float("inf")).min(dim=1).values
+
+            return ((x_max - x_min) / (x_mean + 1e-12)).mean()
+
+        coherent_contrast = option_contrast(coherent).detach()
+
+        classical_contrast = option_contrast(classical).detach()
+
         entropy = -(
             log_probs.exp() * log_probs.clamp(min=-30)
         ).sum(dim=1)
@@ -284,6 +330,8 @@ class CoherentCollapse(nn.Module):
             "interference_ratio": interference_ratio,
             "phase_effect": phase_effect,
             "destructive_fraction": destructive_fraction,
+            "coherent_contrast": coherent_contrast,
+            "classical_contrast": classical_contrast,
             "answer_entropy": entropy.mean(),
             "hypothesis_temperature": (
                 t_hyp.detach().mean() if torch.is_tensor(t_hyp) else t_hyp

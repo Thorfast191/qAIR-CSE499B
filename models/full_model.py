@@ -458,6 +458,7 @@ class QAIRvNext(nn.Module):
             "interference_ratio": coherent["interference_ratio"],
             "phase_effect": coherent["phase_effect"],
             "destructive_fraction": coherent["destructive_fraction"],
+            "coherent_contrast": coherent["coherent_contrast"],
             "classical_weights": coherent["classical"],
             "coherent_weights": coherent["coherent"],
             "llm_prior": llm_term,

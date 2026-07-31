@@ -216,6 +216,23 @@ GEN_TEMPERATURE = 0.7
 #                  i.e. exactly the v44 probability-weighted mixture
 PHASE_MODE = "learned"
 
+# v46: `destructive_fraction` is NOT on its own evidence of anything.
+#
+# With K = 2N matched support/attack pairs it is a step function of one
+# scalar, models/full_model.py::polarity_phase. Sweeping that scalar
+# through CoherentCollapse with everything else fixed gives 0.000 from 0
+# to 1.6 rad, 0.494 at 2.4, 0.994 at 2.8, and 1.000 at 3.0 and above. It
+# is initialized at pi -- already past the step -- so it reads 1.0 for an
+# untrained model and stays there, and it cannot report the SIGN of the
+# effect either: saturating at ~1 is consistent with the coherent ranking
+# being far better than the decohered mixture AND with it being far worse.
+#
+# The test that decides is `coherent_acc` vs `classical_acc` in
+# training/evaluate.py -- ranking options by the coherent sum against
+# ranking them by the decohered limit of the same amplitudes over the same
+# energies. Neither passes through the LLM prior, so the delta is the
+# phase channel and nothing else.
+
 # Where the hypothesis phase comes from when PHASE_MODE == "learned":
 #   "circuit"  -- atan2(<Y>, <X>) of the quantum layer's own measurements,
 #                 so the circuit drives a genuinely quantum operation

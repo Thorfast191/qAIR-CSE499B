@@ -1,4 +1,6 @@
+import math
 import os
+
 import torch
 
 from tqdm.auto import tqdm
@@ -216,6 +218,20 @@ class Trainer:
             print(f"Phase effect  : {metrics['phase_effect']:.4f}   "
                   f"destructive {metrics['destructive_fraction']:.4f}")
 
+            # The decisive line. Everything above says the interference
+            # mechanism is live; this says whether it ranks options better
+            # than the decohered mixture it replaced. Both exclude the LLM
+            # log-prior, so the delta is the phase channel alone.
+            print(f"Coherent Acc  : {metrics['coherent_acc']:.4f}   "
+                  f"classical {metrics['classical_acc']:.4f}   "
+                  f"delta {metrics['coherent_acc'] - metrics['classical_acc']:+.4f}")
+
+            # NOT a good-news number -- it rises under cancellation, since
+            # the relative spread of a small residual is amplified. Read
+            # against ECE and the delta above.
+            print(f"Coh contrast  : {metrics['coherent_contrast']:.4f} "
+                  f"((max-min)/mean over options; rises under cancellation)")
+
             if self.verbose and hasattr(self.model, "fusion"):
                 print(
                     f"energy_alpha={torch.sigmoid(self.model.fusion.energy_alpha).item():.4f} "
@@ -223,6 +239,15 @@ class Trainer:
                     f"dt={torch.sigmoid(self.model.reasoner.dt).item():.4f} "
                     f"anchor={torch.sigmoid(self.model.reasoner.anchor_weight).item():.4f} "
                     f"llm_prior={torch.nn.functional.softplus(self.model.llm_prior_weight).item():.4f}"
+                )
+
+            # destructive_fraction is a step function of this one scalar,
+            # so logging the effect without the cause -- as the v45.1 run
+            # did for seven epochs -- says nothing about whether it moved.
+            if self.verbose and hasattr(self.model, "polarity_phase"):
+                print(
+                    f"polarity_phase={self.model.polarity_phase.item():.4f} "
+                    f"(init {math.pi:.4f})"
                 )
 
             # The complex-amplitude machinery is the v45 claim, so it gets
@@ -243,6 +268,34 @@ class Trainer:
                     f"classical\n  mixture, so do not report a quantum result "
                     f"from this run -- the same failure the\n  v44 audit found, "
                     f"one level up."
+                )
+
+            # The other direction, which the guard above cannot see. Total
+            # cancellation is not the mechanism working hard; it is the
+            # coherent sum stripping magnitude off every option without
+            # adding any evidence about which one is correct, and
+            # destructive_fraction saturates at 1.0 either way.
+            if getattr(self.model, "phase_mode", "classical") == "learned" and (
+                metrics["destructive_fraction"] > 0.99
+                and metrics["coherent_acc"] <= metrics["classical_acc"]
+            ):
+                print(
+                    f"[{self.name}][INTERFERENCE SATURATED] "
+                    f"destructive_fraction="
+                    f"{metrics['destructive_fraction']:.5f} while "
+                    f"coherent_acc={metrics['coherent_acc']:.4f} <= "
+                    f"classical_acc={metrics['classical_acc']:.4f}.\n"
+                    f"  Every option is cancelling and the coherent ranking is "
+                    f"no better than the\n  decohered mixture it replaced -- "
+                    f"cancellation that removes magnitude without\n  adding "
+                    f"evidence. Check polarity_phase (printed above under "
+                    f"verbose): it sets\n  this fraction almost by itself, and "
+                    f"at its pi initialization it already reads\n  1.0 "
+                    f"untrained. Then check the amplitude diversity -- entropy "
+                    f"against log K --\n  because with the phases at 0 and pi "
+                    f"the coherent sum reduces to\n  (sum_support w - "
+                    f"sum_attack w)^2, so uniform amplitudes leave nothing to\n"
+                    f"  discriminate on."
                 )
 
             # The check that would have caught the original failure.

@@ -6,7 +6,7 @@ validation while a 30-line MLP over option embeddings alone scored
 0.3585 -- the architecture was net-NEGATIVE against its own simplest
 baseline, and nothing in the repo would have revealed that.
 
-Three baselines, cheapest first:
+Three baselines and one cache-level check, cheapest first:
 
   --mode llm      The generator's own per-option log-likelihood, read
                   straight out of the cache. Free, since v45 stores it at
@@ -16,6 +16,16 @@ Three baselines, cheapest first:
                   of that model's knowledge and no reviewer will look
                   past it. It went unmeasured for the project's entire
                   history.
+
+  --mode asymmetry
+                  Not a baseline -- a check on the premise the whole v45
+                  design rests on: that the attacking hypothesis for the
+                  CORRECT option is systematically weaker than the attacks
+                  on the distractors. Free, cache-level, no training and
+                  no GPU. If that asymmetry is absent there is nothing for
+                  the coherent collapse to discriminate on, and no amount
+                  of architecture work reaches it -- the fix belongs in
+                  the attack prompt in models/generator.py.
 
   --mode probe    Trainable probes on the cached embeddings. Establishes
                   the DATA ceiling: no architecture over this cache can
@@ -33,7 +43,7 @@ Three baselines, cheapest first:
                   and should reproduce --mode llm exactly; kept as a
                   check that the cached scores are what they claim to be.
 
-  --mode all      llm + probe.
+  --mode all      llm + asymmetry + probe.
 
     python -m evaluation.baselines --mode all --split validation
 """
@@ -97,6 +107,118 @@ def run_cached_llm_baseline(cache_dir, split="validation", max_samples=None,
     )
 
     return acc, records
+
+
+# ==========================================================
+# SUPPORT / ATTACK ASYMMETRY  (free, cache-level)
+# ==========================================================
+
+def run_asymmetry(cache_dir, split="validation", max_samples=None,
+                  arc_config=ARC_CONFIG):
+    """
+    Measures the premise the v45 evidence design rests on: that the LLM
+    objects to a genuinely wrong option more specifically than to a
+    correct one, so the attacking channel carries an asymmetry the
+    coherent collapse can discriminate on.
+
+    The statistic is cos(H_k, O_{hyp_option[k]}) -- how closely each
+    hypothesis tracks the option it was generated to argue about -- split
+    by whether that option is the correct one. Supports are reported as
+    the reference: a gap that appears in BOTH channels is a property of
+    the options and the encoder, not of the attack prompt.
+
+    Fallback rates come with it because a templated fallback is generic
+    text carrying no evidence about any option, so if fallbacks
+    concentrate in one group the cosine gap is partly measuring them.
+
+    With the hypothesis phases at 0 and pi the coherent sum reduces to
+    (sum_support w - sum_attack w)^2, so an attack gap indistinguishable
+    from zero means the collapse has nothing to discriminate on -- and the
+    fix is in the attack prompt in models/generator.py, not in the model.
+    """
+
+    ds = QAIRDataset(
+        split=split, max_samples=max_samples, cache_dir=cache_dir,
+        arc_config=arc_config,
+    )
+
+    # group -> is-the-correct-option -> per-hypothesis values
+    cos = {"attack": {True: [], False: []}, "support": {True: [], False: []}}
+    fell_back = {"attack": {True: [], False: []}, "support": {True: [], False: []}}
+
+    n_samples = 0
+
+    for s in ds.samples:
+
+        pol = s.get("polarity")
+        opt = s.get("hyp_option")
+
+        if pol is None or opt is None:
+            continue
+
+        H = F.normalize(s["H"].float(), dim=-1)
+        O = F.normalize(s["O"].float(), dim=-1)
+
+        flags = s["is_fallback"]
+
+        # Each hypothesis against the option it argues about, not against
+        # every option -- alignment is positional in a v45 cache, so this
+        # pairing is exactly the one generation used.
+        d = (H * O[opt]).sum(-1)
+
+        n_samples += 1
+
+        for k in range(H.shape[0]):
+
+            group = "attack" if pol[k].item() < 0 else "support"
+            on_correct = bool(opt[k].item() == s["y"])
+
+            cos[group][on_correct].append(d[k].item())
+            fell_back[group][on_correct].append(float(flags[k].item()))
+
+    def mean(xs):
+        return sum(xs) / max(len(xs), 1)
+
+    print(f"\n=== SUPPORT/ATTACK ASYMMETRY (cached, {arc_config} {split}) ===")
+    print(f"  {n_samples} samples, split by whether the hypothesis argues "
+          f"about the correct option")
+
+    out = {}
+
+    for key, header, table in (
+        ("cos", "cos(H_k, O_hyp_option[k])", cos),
+        ("fallback", "fallback rate", fell_back),
+    ):
+
+        print(f"\n  {header}")
+        print(f"    {'':<9s}{'correct':>10s}{'distractor':>12s}{'gap':>10s}"
+              f"{'n correct':>12s}{'n distractor':>14s}")
+
+        for group in ("attack", "support"):
+
+            hit = table[group][True]
+            miss = table[group][False]
+
+            c, w = mean(hit), mean(miss)
+
+            print(f"    {group:<9s}{c:>10.4f}{w:>12.4f}{c - w:>+10.4f}"
+                  f"{len(hit):>12d}{len(miss):>14d}")
+
+            out[f"{group}_{key}_correct"] = c
+            out[f"{group}_{key}_distractor"] = w
+            out[f"{group}_{key}_gap"] = c - w
+
+    print(
+        "\n  The attack rows carry the claim; the support rows are the "
+        "reference, since a\n  gap present in both is a property of the "
+        "options rather than of the attack\n  prompt. With the hypothesis "
+        "phases at 0 and pi the coherent sum reduces to\n  (sum_support w - "
+        "sum_attack w)^2, so an attack gap indistinguishable from zero\n"
+        "  means the coherent collapse has no amplitude asymmetry to work "
+        "with."
+    )
+
+    return out
 
 
 # ==========================================================
@@ -295,7 +417,9 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--mode", choices=["llm", "probe", "direct", "all"], default="all"
+        "--mode",
+        choices=["llm", "asymmetry", "probe", "direct", "all"],
+        default="all",
     )
     parser.add_argument("--split", type=str, default="validation")
     parser.add_argument("--cache-dir", type=str, default=CACHE_DIR)
@@ -319,6 +443,12 @@ def main():
 
     if args.mode in ("llm", "all"):
         run_cached_llm_baseline(
+            args.cache_dir, split=args.split, max_samples=max_for_split,
+            arc_config=args.arc_config,
+        )
+
+    if args.mode in ("asymmetry", "all"):
+        run_asymmetry(
             args.cache_dir, split=args.split, max_samples=max_for_split,
             arc_config=args.arc_config,
         )

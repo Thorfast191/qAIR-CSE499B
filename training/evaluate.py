@@ -68,6 +68,30 @@ def evaluate(model, loader, device, return_records=False):
                           is respectable, and nothing in this repo used
                           to measure that.
 
+    v46 adds the comparison none of those three can make. They say the
+    interference mechanism is LIVE; they do not say it HELPS, and
+    `destructive_fraction` cannot even report the sign of its effect -- it
+    is a step function of full_model.polarity_phase, which is initialized
+    past the step, so it reads 1.0 for an untrained model:
+
+      coherent_acc /      accuracy of ranking the options by the coherent
+      classical_acc       sum against ranking them by `classical`, the
+                          decohered limit of the same amplitudes over the
+                          same energies, both taken from one forward pass.
+                          coherent_acc <= classical_acc means the complex
+                          amplitudes are not earning their place whatever
+                          the three diagnostics above report. Both read the
+                          raw option weights, so the LLM log-prior is
+                          excluded by construction -- this separates the
+                          architecture from the prior in a way the headline
+                          `acc` cannot.
+
+      coherent_contrast   (max - min)/mean of the coherent option weights.
+                          Support for the above, never a target: it RISES
+                          under cancellation, because the relative spread
+                          of a small residual is amplified. Read it against
+                          `ece` and against the accuracy pair.
+
     return_records=True additionally returns per-example correctness,
     which evaluation/stats.py needs for bootstrap CIs and McNemar tests.
     """
@@ -77,9 +101,13 @@ def evaluate(model, loader, device, return_records=False):
     correct = 0
     total = 0
 
+    classical_correct = 0
+    coherent_correct = 0
+
     spreads, entropies, diversities = [], [], []
     collapse_peaks, pairwise_cos, h_cos = [], [], []
     interference_ratios, phase_effects, destructive = [], [], []
+    coherent_contrasts = []
 
     conf_all, hit_all = [], []
 
@@ -105,6 +133,20 @@ def evaluate(model, loader, device, return_records=False):
         conf_all.append(conf.detach().cpu())
         hit_all.append(hit.detach().cpu())
 
+        # The two option rankings the phase channel has to choose between,
+        # scored on the same batch. Neither goes through the LLM log-prior
+        # that `scores` carries, so their difference is the phase channel
+        # and nothing else.
+        O_mask = inputs["O_mask"]
+
+        classical_correct += int(
+            (_masked_argmax(out["classical_weights"], O_mask) == y).sum().item()
+        )
+
+        coherent_correct += int(
+            (_masked_argmax(out["coherent_weights"], O_mask) == y).sum().item()
+        )
+
         if return_records:
             records.extend(hit.detach().cpu().tolist())
 
@@ -125,12 +167,15 @@ def evaluate(model, loader, device, return_records=False):
         interference_ratios.append(float(out["interference_ratio"]))
         phase_effects.append(float(out["phase_effect"]))
         destructive.append(float(out["destructive_fraction"]))
+        coherent_contrasts.append(float(out["coherent_contrast"]))
 
     conf_all = torch.cat(conf_all)
     hit_all = torch.cat(hit_all).float()
 
     metrics = {
         "acc": correct / total,
+        "classical_acc": classical_correct / total,
+        "coherent_acc": coherent_correct / total,
         "spread": sum(spreads) / len(spreads),
         "entropy": sum(entropies) / len(entropies),
         "diversity": sum(diversities) / len(diversities),
@@ -140,6 +185,7 @@ def evaluate(model, loader, device, return_records=False):
         "interference_ratio": sum(interference_ratios) / len(interference_ratios),
         "phase_effect": sum(phase_effects) / len(phase_effects),
         "destructive_fraction": sum(destructive) / len(destructive),
+        "coherent_contrast": sum(coherent_contrasts) / len(coherent_contrasts),
         "ece": expected_calibration_error(conf_all, hit_all),
     }
 
@@ -180,6 +226,22 @@ def expected_calibration_error(confidence, hits, n_bins=15):
         ece += (count / n) * abs(acc - conf)
 
     return ece
+
+
+def _masked_argmax(weights, mask):
+    """
+    argmax over the option axis with padded columns driven to the dtype's
+    floor, exactly as full_model does before its final log_softmax. ARC
+    has 3- and 5-option questions, so a zero-padded column left in the
+    reduction can be returned as the prediction -- which is how the v44
+    mask bug produced accuracy on options that did not exist.
+    """
+
+    if mask is not None:
+        neg_inf = torch.finfo(weights.dtype).min / 2
+        weights = weights.masked_fill(~mask, neg_inf)
+
+    return weights.argmax(dim=1)
 
 
 def _pairwise(X, mask, center=False):
