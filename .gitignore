@@ -10,6 +10,7 @@ cache/*
 !cache/.gitkeep
 ckpt/*
 !ckpt/.gitkeep
+!ckpt/*.pt
 logs/*
 !logs/.gitkeep
 exports/*
