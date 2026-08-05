@@ -1,0 +1,81 @@
+ac614e6efe7318a0d9704c184c8179927cceb797|2026-07-21 20:06:19 +0600|debugged and ready to train for v40
+8211f726a120d4a64b8fb62ec69116fe89515c31|2026-07-21 20:00:58 +0600|refactor(training): improve quantum pipeline configurability and reproducibility
+641eca4f31dd79d6ec04c23af58fa988c803485e|2026-07-21 18:49:37 +0600|fixed ablation model module not found error
+004e1374ecce51f0a1caa8bd83b6c57aa6e515ef|2026-07-21 04:08:32 +0600|fixed ImportError: cannot import name 'QAIRvNext' from 'models.full_model' (/content/qAIR-CSE499B/models/full_model.py)
+0534886ea11dd5a1197e753d38db6a8745306ce1|2026-07-21 04:04:01 +0600|fixed quantum enhanced module not found issue
+40fec7529e300a6320445e27655b4ad3f387b0d9|2026-07-21 04:00:52 +0600|fixed ModuleNotFoundError: No module named 'models.quantum_layer_ENHANCED'
+9463292e447870573ef72a3bdd48175effe3d25f|2026-07-21 03:39:31 +0600|fixed ImportError: cannot import name 'HypothesisGenerator' from 'models.generator' (/content/qAIR-CSE499B/models/generator.py)
+91dbb365990c6a5d33cb170395129dc935928d6e|2026-07-21 03:34:04 +0600|changed checkpoint dir name to 38
+8f2cebb56285b189eb46759b1fb9c2536115b050|2026-07-21 03:31:40 +0600|║  🎉 QUANTUM-INSPIRED AI REASONING SYSTEM - COMPLETE DELIVERY 🎉   ║ ║                                                                    ║ ╚════════════════════════════════════════════════════════════════════╝
+3ba407e564e87c0490dc72b2b29a09f623c714fb|2026-07-21 00:06:46 +0600|        # NOTE: warm-starting from a parent ablation's converged weights was         # tried and reverted -- it saturates EnergyAnswerSelector's clamp         # (+/-6) immediately, killing gradient flow through the new         # component (validator/quantum) being added. Each config trains         # from a fresh random init instead.
+a0ef499966bc6a43f72d8db2a0067da338722113|2026-07-20 17:04:25 +0600|changed the save chkponts and cach directory
+884951992e5f2d996c0fa44eb97ad233acd1b86b|2026-07-20 17:03:05 +0600|training/seed.py (new file — create this) training/train.py (full replacement) training/ablations.py (full replacement) models/quantum_layer.py — two small dropout edits models/validator.py — one small dropout edit
+6366983d0187bf3eb36e812d562e371ec0bafc46|2026-07-19 16:55:39 +0600|added complete flag in the dataset
+5bd7dabf3aea33ea4c6f13af88efb05f81f0892b|2026-07-19 15:51:01 +0600|changed the drive dir nbame to v35
+db1128fe69efb7343bacac7e4676075515651f01|2026-07-19 15:47:41 +0600|train() never returns anythingAdd return history. No way to tell which ablation is running in logsPrefix logs with self.name.
+68b47c48e95af8c89ca070b76739d59a58275c68|2026-07-18 09:57:10 +0600|changed checkpoint saving directory name
+fdc5b411f82348b819d4e455903414f405fb1f48|2026-07-15 00:04:24 +0600|changing llm
+1e22838e1156d5d0056495c6eb5856079e79ec63|2026-07-14 23:34:37 +0600|fixing trainning
+3f46010f14314ac5dc41ae21a28bdcac1b3fe734|2026-07-12 16:11:34 +0600|fixed training reasoning step
+af5721db7f4f5a5772dec712f213e689e858c1a1|2026-07-11 15:11:31 +0600|training again to full for v34
+fdfbc1b85253bd94f122cdddffa0920d384c800e|2026-07-07 03:53:29 +0600|Fix hypothesis corruption, collapse collapse-to-uniform, quantum/AMP instability, and data starvation in training pipeline
+55aa70101d7dc47591d0d129635da7fda9495066|2026-07-05 02:16:48 +0600|fixing RuntimeError: Expected all tensors to be on the same device,
+ceefa02e98586a8171bca97a56cc35625f78e62c|2026-07-04 23:40:08 +0600|increasing the trainning site
+2524ec80e30a9f36a04be325b2feb486fe3fa84a|2026-07-02 14:16:18 +0600|git commit -m "Refactor quantum collapse using Born rule wavefunction normalization"
+b4a83a01fa508b41b864bb3adc92eb3056ed779e|2026-07-02 01:34:26 +0600|debugging loss and spread 0
+49657550b8712f4dad6e767c8eb74fe981140b76|2026-07-02 01:30:15 +0600|fixing 0 train loss and spread
+45c4aa933557b2d565647d48f873e10d801a514e|2026-07-02 01:07:54 +0600|fixing runtime err
+56d524e14b77ee760970f82d3a55e1463b145259|2026-07-02 01:02:26 +0600|fixing runtime rr
+4c86ed619c562431daf58cdc4d99e16d90bea4d9|2026-07-02 01:00:02 +0600|fixing runtime rr
+d30d4f2897f2ed38567f268c1dfc35fa8d496223|2026-07-02 00:52:47 +0600|fixing runtime errr
+f905db31b7dd011ef5f9e35c884487cf1b9ebff7|2026-07-02 00:51:19 +0600|made it simpler in full model for debugging
+4074d64bdb5286223f909ecc44556813b0e02269|2026-07-02 00:44:38 +0600|debugging
+61e2c8e600eb54cb61fdb7e31ca3a7cd04380a78|2026-07-02 00:40:13 +0600|fixing runtime err
+39610fbad88d1bbf960613df729bb6c9506b7130|2026-07-02 00:32:35 +0600|RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.cuda.FloatTensor [8, 4]], which is output 0 of ReluBackward0, is at version 1; expected version 0 instead. Hint: the backtrace further above shows the operation that failed to compute its gradient. The variable in question was changed in there or anywhere later. Good luck! fixing
+0df61cf0e40344652c61f8e9968d9d0edaf8101c|2026-07-01 18:09:43 +0600|fixed intendition err
+989c65fbb9253daa9b8b7f53a910b26dc710edb1|2026-07-01 18:05:46 +0600|fixed   File "/content/qAIR-CSE499B/models/full_model.py", line 49     H, trajectory, interaction = self.reasoner(H)     ^ IndentationError: expected an indented block after function definition on line 43
+9084aaa85039bcdadcc1275a3b18f86cba3091c5|2026-07-01 17:33:43 +0600|file name changed to 32
+380a346a0f35707fd230ecc248686cfe324403d1|2026-07-01 17:30:26 +0600|qAIR v32: Major reasoning architecture overhaul and hypothesis-quality improvements
+c7fc3135dc80c2126f658c924dcc17d6a464961a|2026-06-27 11:36:01 +0600|inceasing the train test size
+9bd05aea05e322c608df4b837458de8f04073b78|2026-06-25 10:10:54 +0600|reduce train and val
+8b3066212623b79968b221ef9fdba1331288797d|2026-06-25 10:10:02 +0600|git commit -m "Refactor reasoning pipeline with energy-based quantum measurements"
+ef5851149504f7e1c0869bd9b36adb279ddf10a1|2026-06-25 09:39:51 +0600|git commit -m "Stabilize qAIR training with bounded energy and collapse optimization"
+4668e58e2fa3c1b84a43be82d8e47034e306cd90|2026-06-24 11:03:39 +0600|increased the data quantity
+0f7b3c6c124ae081900ab9fad4e5aaf4a4678289|2026-06-23 09:30:51 +0600|formated
+f7f2d7abbef7d3467285334b851d623a452c6954|2026-06-23 09:27:45 +0600|git commit -m "feat: implement supervised hypothesis validator and improved quantum collapse controller"
+40d67e35eff71986727699f4565c0f0a36552128|2026-06-23 08:59:19 +0600|fixing file name mismatch
+7874b6d19aad4196d083e62f7ab4e5f43198dbeb|2026-06-23 08:57:29 +0600|fixing UnboundLocalError: cannot access local variable 'target' where it is not associated with a value
+aaa79a8732787a0fbc163572e6849d565f6f4ee9|2026-06-23 08:37:05 +0600|prototype testing with 100 train 20 test and 2 epochs
+19e6515ab8d86b3a3a42e518961fe38def660377|2026-06-23 08:35:10 +0600|turned un supervised validator to super vised validator using the datasets groundt truth in v30
+4ef11d4bad8d26f448badce3c4c1f07bfa3a4c5d|2026-06-19 11:59:56 +0600|fixing TypeError: Unpickler.__init__() got an unexpected keyword argument 'best_acc'
+5d13191eebe9cac26b118acf03379226d3d20429|2026-06-19 11:56:20 +0600|fixing KeyError: 'hypothesis_energy'
+0fb132c78e150648ded3c038dca11af801f81112|2026-06-19 11:50:11 +0600|fixing KeyError: 'hypothesis_energy'
+eddcdcf3798a5362fe0f4f09cd1ee8d120435a3d|2026-06-19 11:38:32 +0600|fixing dimension miss match
+9cc5fcd50c7f50f72d1c28f2de7f6d7acd87feed|2026-06-19 11:33:18 +0600|fixing RuntimeError: The size of tensor a (4) must match the size of tensor b (384) at non-singleton dimension 2
+d864515a77b40daf09b67d170c0666096f881324|2026-06-19 11:27:27 +0600|fixing RuntimeError: The size of tensor a (4) must match the size of tensor b (384) at non-singleton dimension 2
+8d811d897933be4388f00a71192b107c49143adf|2026-06-19 11:13:09 +0600|fixing the architecture
+1870db0dfc19e0515569245eeb9943d8ff177ef7|2026-06-19 10:17:55 +0600|fixed checkpoint
+eeb49b710d4131cc2b03f2bcaa3db4b2252bafeb|2026-06-15 19:58:34 +0600|validator moved before quantum layer and multihead attention isn persistence reasoning module is replaced with quantum hamitonian principle
+bf358ac9309ae6c5cd74323b17ecff0a889f909f|2026-06-15 11:04:21 +0600|fixing answer selector
+f8de26404a03aeb450e007ce82e868313e4aa744|2026-06-15 10:54:05 +0600|compute loss fix
+3621b9a47180f9115cf0da70013cf0337eb48ea6|2026-06-15 09:43:12 +0600|feat(qAIR): introduce energy-driven amplitude collapse and quantum energy fusion
+43a0a6a96160d5718b8cd073c7667c0e3f0e0c93|2026-06-15 08:36:56 +0600|fixing ablation cehckpoint trainning
+6157e888aa3e146d995b8c426fdc4149c8522f1f|2026-06-15 08:10:19 +0600|fixing cehck point saving mechanism
+02b7694e7a9ded6044c6aca2f2c01f2ebd464195|2026-06-15 07:50:00 +0600|fixing chck pont saving
+1d9354f659ba785f6f565015f7f61ac8924717d7|2026-06-15 07:37:04 +0600|fixed sample reasoning module not found by removing it
+43eec56d1d414eff37d351e8507096bf592b687a|2026-06-15 07:24:51 +0600|re oraganized and fixed collaps train full model
+06ee4d53f1b7db93ad169b1bf8c600d9a2cd17f9|2026-06-15 06:58:18 +0600|Add package init files
+410389776c7d6eae1326e3fe11c5e25db41dd9fc|2026-06-03 20:17:20 +0600|test sample integration
+c5d7941b52d434c197127d20c6a31a6a4307e805|2026-06-03 20:06:13 +0600|Remove sentence-transformers dependency
+5d24e4d565e2c6da73ef60950d22c607738f9966|2026-06-03 20:01:05 +0600|ablation fix
+85b0c2e70c46fd3047a977038c60e55648bc1c48|2026-06-03 15:49:19 +0600|added visualization in traner and added ablation graph
+51ef646d547c3f0fafba18da48b2993ef1b98ebf|2026-06-03 15:33:46 +0600|fix the option-count inconsistency
+fea6a78114b3a9c3771c4547b841fcc1059c5632|2026-06-02 02:01:25 +0600|progress bar integration
+3ff382ec88d6c1c4f155d8da1196aad18e4ac4d6|2026-06-02 01:41:26 +0600|gemma model changed to qwen
+a9920acc3dc94644d1072f5a329c1f91684c9dd2|2026-06-02 01:37:46 +0600|restructured
+c06bea2424c35046c4f5c4fa13607f44a79a6943|2026-05-19 14:17:38 +0600|testing
+b7a49e217004fa660946e9388514266103f308a4|2026-05-19 14:15:31 +0600|testing
+814e248208fbdc52571b53990c68488be9b52d94|2026-05-19 14:13:19 +0600|testing
+6e284859a84242809653bab9f4889ace7242c066|2026-05-19 14:11:20 +0600|testing
+d9ae4f4e3d6bc6a735e72fed2808a68b7550cf42|2026-05-19 14:09:13 +0600|testing
+dd2e85aea682c2f35f65972d36463a176a4c669b|2026-05-18 10:47:50 +0600|Folder Structure Setup
